@@ -1,0 +1,12 @@
+node_modules/
+
+# Generated warehouse and audit log — rebuilt with `npm run seed`.
+# The audit log in particular should never be committed: it is evidence,
+# and a chain that has been through a merge conflict is not evidence.
+db/warehouse.db
+db/audit.jsonl
+*.audit.json
+
+.env
+.env.*
+!.env.example
