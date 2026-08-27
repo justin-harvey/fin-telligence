@@ -1,0 +1,21 @@
+{
+  "name": "fintelligence-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A working core for the Fin-Telligence thesis: the model writes SQL, the database produces the numbers, and every answer carries a verifiable provenance chain.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "seed": "node bin/fintel.js seed",
+    "ask": "node bin/fintel.js ask",
+    "audit": "node bin/fintel.js audit",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.72.0",
+    "node-sql-parser": "^5.3.0",
+    "zod": "^4.4.3"
+  }
+}
