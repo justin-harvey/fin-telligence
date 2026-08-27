@@ -8,7 +8,7 @@ which, because they are not the same kind of artifact:
 | | What it is | Does it run? |
 |---|---|---|
 | [`prototype/`](prototype/) | A design prototype of the product. Every figure in it is **hardcoded**. There is no database and no model behind it. | Renders. Computes nothing. |
-| [`fintelligence-core/`](fintelligence-core/) | An implementation of the thesis the prototype argues for. | Yes — 43 tests, no credential required. |
+| [`fintelligence-core/`](fintelligence-core/) | An implementation of the thesis the prototype argues for. | Yes — 49 tests offline, 57 against a live PostgreSQL. |
 
 The prototype makes a claim: that an answer about your revenue should arrive
 with the SQL that produced it, and that no figure should reach you unless it
@@ -21,11 +21,16 @@ under test.
 cd fintelligence-core
 npm install
 npm run seed     # deterministic synthetic warehouse
-npm test         # 43 passing, no API key needed
+npm test         # 49 passing, 8 skipped, no API key needed
 ```
 
 The guard, the read-only database boundary, the lineage record and the audit
 chain all run offline. Only planning and narration call a model.
+
+The 8 skipped tests need a live PostgreSQL; with one configured the suite is 57
+passing and 0 skipped. The core runs against either warehouse, and a test
+asserts the same question produces the same lineage hash on both — a provenance
+record that changed when you changed database would not be worth much.
 
 ```bash
 node bin/fintel.js explain "SELECT name FROM sqlite_master"

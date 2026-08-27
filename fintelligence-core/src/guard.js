@@ -27,6 +27,21 @@ import sqlParser from 'node-sql-parser';
 const { Parser } = sqlParser;
 const parser = new Parser();
 
+/**
+ * Dialect names this guard will parse, keyed by warehouse dialect.
+ *
+ * The parser is dialect-sensitive in ways that matter here: Postgres syntax
+ * the SQLite grammar rejects (casts with `::`, `FILTER (WHERE ...)`) would be
+ * thrown out as unparseable, and a guard that rejects valid analytics SQL is
+ * a guard people route around. Parsing under the wrong grammar is not a safe
+ * default in either direction, so the dialect is passed in rather than
+ * guessed.
+ */
+const PARSER_DIALECT = Object.freeze({
+    sqlite: 'sqlite',
+    postgresql: 'postgresql',
+});
+
 /** Tables a generated query is permitted to read. */
 export const ALLOWED_TABLES = Object.freeze([
     'customers',
@@ -75,10 +90,20 @@ function cteNames(ast) {
  * Validate a model-generated SQL statement and return a safe form of it.
  *
  * @param {string} sql
- * @returns {{ sql: string, tables: string[], limitInjected: boolean }}
+ * @param {object} [options]
+ * @param {'sqlite'|'postgresql'} [options.dialect]
+ * @returns {{ sql: string, tables: string[], limitInjected: boolean, dialect: string }}
  * @throws {SqlRejected}
  */
-export function guard(sql) {
+export function guard(sql, { dialect = 'sqlite' } = {}) {
+    const grammar = PARSER_DIALECT[dialect];
+    if (!grammar) {
+        // An unrecognised dialect must not silently fall back to another
+        // grammar: that is how a statement gets approved under rules that do
+        // not describe the database it will run against.
+        throw new SqlRejected('unknown_dialect', `No parser grammar for dialect: ${dialect}.`);
+    }
+
     if (typeof sql !== 'string' || sql.trim() === '') {
         throw new SqlRejected('empty', 'No SQL was produced.');
     }
@@ -97,7 +122,7 @@ export function guard(sql) {
 
     let parsed;
     try {
-        parsed = parser.parse(trimmed, { database: 'sqlite' });
+        parsed = parser.parse(trimmed, { database: grammar });
     } catch (error) {
         throw new SqlRejected('unparseable', `Could not parse the statement: ${error.message}`);
     }
@@ -165,5 +190,5 @@ export function guard(sql) {
     const hasLimit = Array.isArray(statement.limit?.value) && statement.limit.value.length > 0;
     const safeSql = hasLimit ? trimmed : `${trimmed}\nLIMIT ${MAX_ROWS}`;
 
-    return { sql: safeSql, tables: realTables.sort(), limitInjected: !hasLimit };
+    return { sql: safeSql, tables: realTables.sort(), limitInjected: !hasLimit, dialect };
 }

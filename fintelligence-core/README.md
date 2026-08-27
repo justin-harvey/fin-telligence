@@ -22,7 +22,7 @@ question
 ```bash
 npm install
 npm run seed                      # build the demo warehouse
-npm test                          # 43 tests, no credential required
+npm test                          # 49 pass, 8 skip — no credential required
 
 export ANTHROPIC_API_KEY=...      # or: ant auth login
 node bin/fintel.js ask "How has MRR trended over the period?"
@@ -38,6 +38,9 @@ node bin/fintel.js explain "SELECT name FROM sqlite_master"
 # REJECTED
 #   reason : table_not_allowed
 ```
+
+The 8 skipped tests need a live PostgreSQL. With one configured the suite is
+57 passing, 0 skipped — see [Running against PostgreSQL](#running-against-postgresql).
 
 ## The four guarantees, and what enforces each
 
@@ -133,6 +136,102 @@ Stripe/NetSuite schema, PII detection for the GDPR annotation, and any UI. The
 audit entries carry `SOX` and `GDPR: no PII` tags because the query path is
 read-only over a schema with no personal data — that is a true statement about
 *this* configuration, not a compliance claim.
+
+## Running against PostgreSQL
+
+SQLite is the demo. The same pipeline runs against a networked warehouse, and
+the point of supporting a second one is that the guarantees have to survive the
+move — a lineage hash that changes when you change database is not a lineage
+hash.
+
+```bash
+# 1. mirror the demo data into Postgres (refuses if the database holds
+#    tables it did not create — it runs DROP TABLE)
+export FINTEL_ADMIN_DATABASE_URL=postgres://admin:...@host:5432/fintel
+node bin/fintel.js mirror-postgres
+
+# 2. provision the read-only role (password is a psql variable, not a file)
+psql -d fintel -v reader_password="'...'" -f db/postgres/readonly-role.sql
+
+# 3. point the pipeline at it and prove the credential cannot write
+export DATABASE_URL=postgres://fintel_reader:...@host:5432/fintel
+node bin/fintel.js warehouse
+```
+
+`fintel warehouse` prints the evidence rather than an assurance:
+
+```
+READ-ONLY
+  dialect   : postgresql
+  connection: postgres://fintel_reader:***@localhost:5432/fintel
+  [pass] not_superuser
+  [pass] no_schema_create
+  [pass] no_write_privilege:customers
+  ...
+  [pass] write_probe
+         permission denied for table customers
+```
+
+`ask()` runs this before it plans anything and refuses at the `verify` stage on
+a writable connection — before the model is called at all.
+
+### What running it against a live server actually surfaced
+
+None of these are visible by reading the code. Each has a regression test.
+
+**The read-only check has to be able to fail.** A check that consults only the
+catalog passes trivially for a superuser, because superusers bypass privilege
+checks and `has_table_privilege` returns true for everything. So there are two
+independent checks — what the catalog says, and an actual `INSERT` inside a
+transaction that is always rolled back — and a test that points the whole thing
+at a deliberately writable role to confirm it reports `false`. A safety check
+that cannot fail is not a safety check.
+
+**Registering the `int8` type parser is not enough.** `pg` returns `BIGINT` and
+`NUMERIC` as strings, correctly: both hold values float64 cannot represent.
+But the lineage hash is taken over the rows, so SQLite's `3585700` and
+Postgres's `"3585700"` hash differently and the same question against the same
+data yields two different provenance records. The trap is that `SUM()` over a
+`BIGINT` column returns `NUMERIC`, not `BIGINT` — the sum of a money column is
+the single most likely thing an analytics query selects, so the type left
+unhandled is the one that matters most. Both are parsed, under a rule that
+converts only when the text round-trips through `Number` exactly; anything
+else stays a string rather than becoming a value that is quietly off by one.
+
+**The mirror's safety check failed open.** It refuses to touch a database
+holding tables it did not create, because it runs `DROP TABLE`. Reading
+`information_schema.tables` to find them is wrong in the worst direction: the
+standard defines it to show only objects the current role holds a privilege on,
+so pointing it at a database full of another team's tables, with a role that
+has no rights to them, returns *zero rows*. The check concluded the database was
+empty and cleared the way to drop things — it was at its most permissive
+exactly when it knew least. It now reads `pg_catalog`, which is not
+privilege-filtered.
+
+**Grants attach to objects, not names.** The mirror drops and recreates every
+table, so each run produces new objects that happen to share a name — silently
+revoking the reader's `SELECT`. The symptom appears much later as `permission
+denied for table customers`, which reads like a broken adapter or a bad
+password rather than two setup steps run in the wrong order. The mirror
+re-grants, so the steps commute. This one bit the test suite itself: re-running
+the mirror stripped the writable fixture role of its grants, and the negative
+tests started passing for the wrong reason — they saw a role that could not
+write and concluded the read-only check worked. Each test now establishes its
+own precondition.
+
+**`DROP ROLE IF EXISTS` does not belong in a provisioning script.** Roles are
+cluster-wide, so the drop fails if the role holds a privilege in any other
+database — and `psql` without `ON_ERROR_STOP` keeps going. Every later
+statement then applies to a role still carrying its old password and old
+grants, and the script reports success. The script creates if absent and
+`ALTER`s, and sets `ON_ERROR_STOP`.
+
+### Not built
+
+The BigQuery and Snowflake adapters do not exist. The adapter interface is
+shaped so they could be added, which is not the same thing as having added
+them, and this section will say so until one has been run against a live
+warehouse.
 
 ## On compliance vocabulary
 

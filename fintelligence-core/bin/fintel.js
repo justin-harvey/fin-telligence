@@ -7,6 +7,8 @@
  *   fintel audit                       verify the chain and show the log
  *   fintel audit --export out.json     write the audit package
  *   fintel explain "SELECT ..."        run the guard against SQL, no model call
+ *   fintel warehouse                   prove the configured connection cannot write
+ *   fintel mirror-postgres             copy the demo warehouse into PostgreSQL
  */
 
 import { writeFileSync } from 'node:fs';
@@ -14,6 +16,8 @@ import { seed } from '../src/db.js';
 import { guard, SqlRejected } from '../src/guard.js';
 import { ask } from '../src/ask.js';
 import { verify, readLog, exportPackage } from '../src/audit.js';
+import { openWarehouse } from '../src/warehouse/index.js';
+import { mirrorToPostgres } from '../src/warehouse/mirror.js';
 
 const [, , command, ...rest] = process.argv;
 
@@ -49,12 +53,53 @@ async function main() {
             break;
         }
 
+        case 'warehouse': {
+            const db = openWarehouse();
+            try {
+                const proof = await db.assertReadOnly();
+                console.log(proof.readOnly ? 'READ-ONLY' : 'WRITABLE — REFUSING');
+                console.log('  dialect   :', db.dialect);
+                console.log('  connection:', proof.connection);
+                for (const check of proof.checks) {
+                    const mark = check.passed ? 'pass' : 'FAIL';
+                    console.log(`  [${mark}] ${check.check}`);
+                    console.log(`         ${check.detail.split('\n')[0]}`);
+                }
+                if (!proof.readOnly) process.exitCode = 1;
+            } finally {
+                await db.close();
+            }
+            break;
+        }
+
+        case 'mirror-postgres': {
+            const result = await mirrorToPostgres({ force: rest.includes('--force') });
+            const total = Object.values(result.tables).reduce((a, b) => a + b, 0);
+            console.log('Mirrored the demo warehouse into PostgreSQL.');
+            for (const [table, count] of Object.entries(result.tables)) {
+                console.log(`  ${table.padEnd(20)} ${count}`);
+            }
+            console.log(`  ${'total'.padEnd(20)} ${total}`);
+            console.log(
+                result.regrantedReader
+                    ? '  re-granted SELECT to fintel_reader (grants follow objects, not names)'
+                    : '  fintel_reader does not exist yet; run db/postgres/readonly-role.sql next',
+            );
+            break;
+        }
+
         case 'explain': {
             // Runs the guard alone. Useful for probing the boundary without
             // spending a model call, and for demonstrating what it refuses.
-            const sql = rest.join(' ');
+            // Flags must be removed before the rest is joined into SQL. Left
+            // in, '--postgres' is not an unrecognised option — it is a SQL
+            // line comment, and it silently comments out the entire statement.
+            // The guard then rejects an empty input, which looks like the
+            // boundary working while actually testing nothing.
+            const dialect = rest.includes('--postgres') ? 'postgresql' : 'sqlite';
+            const sql = rest.filter((token) => token !== '--postgres').join(' ');
             try {
-                const result = guard(sql);
+                const result = guard(sql, { dialect });
                 console.log('ALLOWED');
                 console.log('  tables       :', result.tables.join(', '));
                 console.log('  limitInjected:', result.limitInjected);

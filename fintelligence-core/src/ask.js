@@ -15,7 +15,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { openReadOnly } from './db.js';
+import { openWarehouse } from './warehouse/index.js';
 import { guard, SqlRejected } from './guard.js';
 import { plan } from './planner.js';
 import { narrate } from './narrator.js';
@@ -28,6 +28,8 @@ import { append } from './audit.js';
  * @param {string} question
  * @param {object} [options]
  * @param {string} [options.dbPath]
+ * @param {import('./warehouse/index.js').Warehouse} [options.warehouse] pre-opened warehouse
+ * @param {boolean} [options.requireReadOnly] refuse to query a writable connection
  * @param {string} [options.logPath]
  * @param {Anthropic} [options.client]
  * @param {string} [options.actor]
@@ -40,12 +42,45 @@ export async function ask(question, {
     client = new Anthropic(),
     actor = 'local',
     skipNarration = false,
+    warehouse,
+    requireReadOnly = true,
 } = {}) {
+    const db = warehouse ?? openWarehouse({ dbPath });
+    const ownsWarehouse = warehouse === undefined;
+
+    try {
+        return await run();
+    } finally {
+        if (ownsWarehouse) await db.close();
+    }
+
+    async function run() {
+    // Before the model is asked for anything, prove the credential this
+    // pipeline holds cannot write. A tool whose whole claim is that the model
+    // only ever reads should establish that first, not assume it — and should
+    // refuse to run at all rather than produce an answer it cannot stand
+    // behind.
+    if (requireReadOnly) {
+        const proof = await db.assertReadOnly();
+        if (!proof.readOnly) {
+            return {
+                ok: false,
+                stage: 'verify',
+                reason: 'connection_not_read_only',
+                message:
+                    'The warehouse connection can write. Refusing to run: ' +
+                    proof.checks.filter((c) => !c.passed).map((c) => c.check).join(', '),
+                question,
+                readOnlyProof: proof,
+            };
+        }
+    }
+
     const planned = await plan(question, { client });
 
     let guarded;
     try {
-        guarded = guard(planned.sql);
+        guarded = guard(planned.sql, { dialect: db.dialect });
     } catch (error) {
         if (error instanceof SqlRejected) {
             return {
@@ -61,14 +96,14 @@ export async function ask(question, {
         throw error;
     }
 
-    const db = openReadOnly(dbPath);
     let rows;
     try {
-        rows = db.prepare(guarded.sql).all();
+        rows = await db.query(guarded.sql);
     } catch (error) {
-        // Reaching here means the guard approved a statement SQLite would not
-        // run — a syntax quirk, an unknown column, or (importantly) a write
-        // the read-only connection refused. Worth surfacing distinctly.
+        // Reaching here means the guard approved a statement the warehouse
+        // would not run — a syntax quirk, an unknown column, or (importantly)
+        // a write the read-only connection refused. Worth surfacing
+        // distinctly.
         return {
             ok: false,
             stage: 'execute',
@@ -78,13 +113,7 @@ export async function ask(question, {
             proposedSql: guarded.sql,
             interpretation: planned.interpretation,
         };
-    } finally {
-        db.close();
     }
-
-    // node:sqlite returns null-prototype objects; normalise so downstream
-    // JSON serialisation and key enumeration behave predictably.
-    rows = rows.map((row) => ({ ...row }));
 
     const narration = skipNarration
         ? { text: '', grounded: true, attempts: 0, verification: null, fellBack: false }
@@ -125,5 +154,7 @@ export async function ask(question, {
         lineage,
         auditSeq: entry.seq,
         auditHash: entry.hash,
+        warehouse: db.describe,
     };
+    }
 }
