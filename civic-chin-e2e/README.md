@@ -6,6 +6,24 @@ blank pages, console errors, JS crashes, and 4xx/5xx responses. Built to run
 policy can reach the app host. (It was authored in a sandbox that can't reach
 `civic-chin.com`, so it's ready-to-run rather than already-run.)
 
+
+## Easiest way to run it (no terminal)
+
+Double-click the launcher for your machine:
+
+- **Mac / Linux:** `run.command`
+- **Windows:** `run.bat`
+
+It installs everything the first time, then opens Playwright's **graphical test
+runner** — you click a test and watch a real browser drive through your app.
+
+First launch creates a `.env` file and asks you to set one thing: `BASE_URL`
+(your site's address). Open `.env` in any text editor, set it, and double-click
+the launcher again.
+
+> On Mac, the first time you may need to right-click `run.command` -> Open to get
+> past the "unidentified developer" prompt. After that, double-click works.
+
 ## What it does
 
 | Spec | Purpose | Login? |
