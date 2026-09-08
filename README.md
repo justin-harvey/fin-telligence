@@ -27,6 +27,13 @@ question
 
 The prototype makes the case. The core makes it executable. Start with the [`fintelligence-core/` README](fintelligence-core/README.md) for the full technical account.
 
+## Two warehouses
+
+The same pipeline runs against two synthetic warehouses — the guard, grounding, lineage and audit chain are identical; only the schema and allow-list change.
+
+- **SaaS finance** — MRR, retention, LTV:CAC and cohort questions. The demo that shows the engine works.
+- **Capital markets** — the flagship: trade-surveillance attestation. Net position at market close (computed in SQL, pinned to an as-of timestamp, reproducible hash) and market-abuse surveillance (accounts that place and cancel within milliseconds — the shape spoofing and layering leave), framed against MAR / MiFID II. Alerts are appended to the signed, hash-chained log, so a surveillance finding cannot be quietly walked back; altering a past alert breaks verification. See the [core README](fintelligence-core/README.md#trade-surveillance-attestation).
+
 ## The four guarantees, and what enforces each
 
 A claim is only worth what enforces it. Each guarantee is backed by a mechanism and a test that would fail if it broke, not by a promise.
@@ -49,6 +56,11 @@ npm test                          # 88 tests, no credential required
 export ANTHROPIC_API_KEY=...      # only planning and narration call a model
 node bin/fintel.js ask "How has MRR trended over the period?"
 node bin/fintel.js audit
+
+# capital-markets demo (no credential needed — canonical queries, not model-generated)
+node bin/fintel.js markets seed
+node bin/fintel.js markets net-position ACME    # net position at close, pinned as-of and hashed
+node bin/fintel.js markets surveillance         # flag rapid place-and-cancel accounts
 ```
 
 The guard, the warehouse, the lineage record, and the audit chain all run with no credential. Only the plan and narrate steps call the model.
@@ -57,8 +69,8 @@ The guard, the warehouse, the lineage record, and the audit chain all run with n
 
 In keeping with the project's own discipline about claims:
 
-- **Real:** the guard, read-only enforcement, the SQLite warehouse, lineage capture and hashing, the audit chain, grounding verification, the CLI, and the offline test suite.
-- **Synthetic:** the data. Customers over six months, generated deterministically from a fixed seed so the same question always produces the same result hash. The numbers are invented, internally consistent, and describe no real company. For a tool about traceable figures, fabricated data clearly labelled as fabricated is fine; fabricated data presented as real is the exact failure this project exists to prevent.
+- **Real:** the guard (table and column allow-lists, a query budget, a row-level scope hook driven by an authenticated principal), read-only enforcement behind a warehouse-connector interface, two SQLite warehouses, unit-aware grounding, lineage capture and hashing, the hash-chained audit chain with Ed25519 signing and a pluggable external-anchoring hook, a first-class metric registry, the CLI, and the offline test suite.
+- **Synthetic:** the data in both warehouses, generated deterministically from a fixed seed so the same question always produces the same result hash. The numbers are invented, internally consistent, and describe no real company or market. For a tool about traceable figures, fabricated data clearly labelled as fabricated is fine; fabricated data presented as real is the exact failure this project exists to prevent.
 - **Not a compliance claim:** the audit entries carry `SOX` and `GDPR: no PII` tags because the query path is read-only over a schema with no personal data. That is a true statement about this configuration, not a certification. SOC 2, SOX, and GDPR are properties of organizations and processes, not of software. What this produces is evidence: a query, its provenance, a reproducible hash of its result, and a chain showing the record has not been edited since.
 
 ## Requirements
