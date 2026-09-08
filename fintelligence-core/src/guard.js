@@ -149,6 +149,9 @@ function cteNames(ast) {
  * @param {{ column: string, value: string|number }} [options.scope] a mandatory
  *   predicate injected into the top-level WHERE, bound as a parameter (never
  *   inlined). The foundation the auth/RLS layer builds on.
+ * @param {{ column: string, value: string|number }} [options.asOf] an as-of
+ *   cutoff: `column <= value` injected into the top-level WHERE and bound as a
+ *   parameter, so a figure can be reproduced as it stood at a point in time.
  * @returns {{ sql: string, tables: string[], columns: string[], limitInjected: boolean, params: Array<string|number> }}
  * @throws {SqlRejected}
  */
@@ -156,6 +159,7 @@ export function guard(sql, options = {}) {
     const allowedTables = options.allowedTables ?? ALLOWED_TABLES;
     const allowedColumns = options.allowedColumns ?? null;
     const scope = options.scope ?? null;
+    const asOf = options.asOf ?? null;
 
     if (typeof sql !== 'string' || sql.trim() === '') {
         throw new SqlRejected('empty', 'No SQL was produced.');
@@ -280,28 +284,38 @@ export function guard(sql, options = {}) {
     // an unbounded cross join will happily try to return millions of rows.
     const hasLimit = Array.isArray(statement.limit?.value) && statement.limit.value.length > 0;
 
-    // Row-level scoping. When a principal's scope is supplied, a mandatory
-    // equality predicate is AND-ed into the top-level WHERE and the value is
+    // Injected predicates. A principal's scope (`column = value`) and an as-of
+    // cutoff (`column <= value`) are AND-ed into the top-level WHERE, each value
     // bound as a parameter — sqlify does not escape string literals, so a value
-    // must never be inlined. Injected after column extraction, so the scope
-    // column is not itself subject to the column allow-list. No scope means the
-    // original text is returned untouched, preserving lineage fidelity.
+    // must never be inlined. Injected after column extraction, so an injected
+    // column is not itself subject to the column allow-list. With neither, the
+    // original text is returned untouched, preserving lineage fidelity. The
+    // parameter array follows placeholder order: scope first, then as-of.
     const params = [];
+    const injections = [];
+    if (scope) injections.push({ label: 'scope', column: scope.column, operator: '=', value: scope.value });
+    if (asOf) injections.push({ label: 'as-of', column: asOf.column, operator: '<=', value: asOf.value });
+
     let safeSql;
-    if (scope) {
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(scope.column)) {
-            throw new SqlRejected('bad_scope', `Scope column is not a plain identifier: ${scope.column}.`);
+    if (injections.length > 0) {
+        for (const injection of injections) {
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(injection.column)) {
+                throw new SqlRejected(
+                    'bad_scope',
+                    `The ${injection.label} column is not a plain identifier: ${injection.column}.`,
+                );
+            }
+            const predicate = {
+                type: 'binary_expr',
+                operator: injection.operator,
+                left: { type: 'column_ref', table: null, column: injection.column },
+                right: { type: 'origin', value: '?' },
+            };
+            statement.where = statement.where
+                ? { type: 'binary_expr', operator: 'AND', left: statement.where, right: predicate }
+                : predicate;
+            params.push(injection.value);
         }
-        const predicate = {
-            type: 'binary_expr',
-            operator: '=',
-            left: { type: 'column_ref', table: null, column: scope.column },
-            right: { type: 'origin', value: '?' },
-        };
-        statement.where = statement.where
-            ? { type: 'binary_expr', operator: 'AND', left: statement.where, right: predicate }
-            : predicate;
-        params.push(scope.value);
         safeSql = parser.sqlify(statement, { database: 'sqlite' });
         if (!hasLimit) safeSql += `\nLIMIT ${MAX_ROWS}`;
     } else {

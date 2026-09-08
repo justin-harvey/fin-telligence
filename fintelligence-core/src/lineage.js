@@ -56,6 +56,9 @@ export function fingerprint(value) {
  * @param {boolean}  params.limitInjected whether the guard added a LIMIT
  * @param {string}   [params.model]       model that generated the SQL
  * @param {string}   [params.actor]       who asked
+ * @param {{ column: string, value: string|number }|null} [params.asOf] the as-of
+ *   cutoff applied, recorded so the figure can be reproduced exactly as it
+ *   stood at that point in time
  * @returns {object}
  */
 export function buildLineage({
@@ -66,6 +69,7 @@ export function buildLineage({
     limitInjected,
     model = null,
     actor = 'local',
+    asOf = null,
 }) {
     const columns = rows.length > 0 ? Object.keys(rows[0]).sort() : [];
 
@@ -79,6 +83,7 @@ export function buildLineage({
         limitInjected,
         model,
         actor,
+        asOf,
         // The LLM's authority stops at SQL generation. Recording that as a
         // field, rather than as a sentence in a README, means the audit
         // export carries the claim and an auditor can filter on it.

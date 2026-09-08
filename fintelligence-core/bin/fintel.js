@@ -13,7 +13,9 @@ import { writeFileSync } from 'node:fs';
 import { seed } from '../src/db.js';
 import { guard, SqlRejected } from '../src/guard.js';
 import { ask } from '../src/ask.js';
-import { verify, readLog, exportPackage } from '../src/audit.js';
+import { verify, readLog, exportPackage, headHash } from '../src/audit.js';
+import { loadSigner } from '../src/signing.js';
+import { anchorHead, localStubAnchor } from '../src/anchor.js';
 
 const [, , command, ...rest] = process.argv;
 
@@ -103,10 +105,19 @@ async function main() {
                 console.log('  NOTE            : narration failed verification; mechanical summary used');
             }
             console.log('  audit entry     : #' + result.auditSeq + '  ' + result.auditHash.slice(0, 16) + '…');
+            console.log(
+                '  signature       : ' +
+                    (result.signed ? `signed (key ${result.signingKeyId})` : 'unsigned (no signing key configured)'),
+            );
             break;
         }
 
         case 'audit': {
+            // A signing key in the environment also yields the public key, so
+            // the audit view verifies signatures as well as the hash chain.
+            const signer = loadSigner();
+            const verifier = signer ? { publicKey: signer.publicKey } : null;
+
             const exportIndex = rest.indexOf('--export');
             if (exportIndex !== -1) {
                 const target = rest[exportIndex + 1];
@@ -115,14 +126,25 @@ async function main() {
                     process.exitCode = 2;
                     return;
                 }
-                const pkg = exportPackage();
+                // Anchor the current head to an external record. Only a local
+                // stub ships here; a TLaaS adapter satisfies the same interface.
+                const receipt = await anchorHead(headHash(), localStubAnchor());
+                const pkg = exportPackage(undefined, { verifier, anchorReceipt: receipt });
                 writeFileSync(target, JSON.stringify(pkg, null, 2));
-                console.log(`Wrote audit package: ${target} (${pkg.entryCount} entries, integrity ${pkg.integrity.ok ? 'OK' : 'BROKEN'})`);
+                console.log(
+                    `Wrote audit package: ${target} (${pkg.entryCount} entries, ` +
+                        `integrity ${pkg.integrity.ok ? 'OK' : 'BROKEN'}, ` +
+                        `${pkg.signing.signedEntries}/${pkg.entryCount} signed` +
+                        `${receipt ? `, anchored ${receipt.ref.slice(0, 16)}…` : ''})`,
+                );
                 return;
             }
 
-            const integrity = verify();
-            console.log(`Audit chain: ${integrity.entries} entries — ${integrity.ok ? 'INTACT' : 'BROKEN'}`);
+            const integrity = verify(undefined, { verifier });
+            console.log(
+                `Audit chain: ${integrity.entries} entries — ${integrity.ok ? 'INTACT' : 'BROKEN'}` +
+                    `${verifier ? ' (signatures checked)' : ''}`,
+            );
             if (!integrity.ok) {
                 console.log(`  broken at entry ${integrity.brokenAt}: ${integrity.reason}`);
                 process.exitCode = 1;

@@ -21,6 +21,7 @@ import { plan } from './planner.js';
 import { narrate } from './narrator.js';
 import { buildLineage } from './lineage.js';
 import { append } from './audit.js';
+import { loadSigner } from './signing.js';
 
 /**
  * Answer one question end to end.
@@ -32,6 +33,10 @@ import { append } from './audit.js';
  * @param {Anthropic} [options.client]
  * @param {string} [options.actor]
  * @param {boolean} [options.skipNarration] execute and record, but do not narrate
+ * @param {{ column: string, value: string|number }} [options.asOf] reproduce the
+ *   answer as it stood at a point in time (injected as `column <= value`)
+ * @param {object|null} [options.signer] key to sign the attestation; defaults to
+ *   one loaded from the environment, or null when none is configured
  * @returns {Promise<object>}
  */
 export async function ask(question, {
@@ -40,12 +45,14 @@ export async function ask(question, {
     client = new Anthropic(),
     actor = 'local',
     skipNarration = false,
+    asOf = null,
+    signer = loadSigner(),
 } = {}) {
     const planned = await plan(question, { client });
 
     let guarded;
     try {
-        guarded = guard(planned.sql);
+        guarded = guard(planned.sql, { asOf });
     } catch (error) {
         if (error instanceof SqlRejected) {
             return {
@@ -107,6 +114,7 @@ export async function ask(question, {
         limitInjected: guarded.limitInjected,
         model: planned.model,
         actor,
+        asOf,
     });
 
     const entry = append(
@@ -117,7 +125,7 @@ export async function ask(question, {
             narrationFellBack: narration.fellBack,
             ungroundedFigures: narration.verification?.ungrounded?.map((n) => n.raw) ?? [],
         },
-        { path: logPath, complianceTags: ['SOX', 'GDPR: no PII'] },
+        { path: logPath, complianceTags: ['SOX', 'GDPR: no PII'], signer },
     );
 
     return {
@@ -134,5 +142,7 @@ export async function ask(question, {
         lineage,
         auditSeq: entry.seq,
         auditHash: entry.hash,
+        signed: Boolean(entry.signature),
+        signingKeyId: entry.signingKeyId ?? null,
     };
 }
