@@ -22,6 +22,16 @@
  *   identity   1.08          -> "1.08"
  *   ÷100       56_341_200¢   -> "$563,412"     (cents to currency)
  *   ×100       0.367         -> "36.7%"        (ratio to percentage)
+ *   ×10000     0.0125        -> "125 bps"      (ratio to basis points)
+ *
+ * Which transforms are tried is decided by the *unit the prose wrote the figure
+ * in*. A number written as currency is matched by identity or cents; one
+ * written as a percentage by identity or ×100; one in basis points by identity,
+ * ×100 (from a percent) or ×10000 (from a ratio). This narrowing is not
+ * cosmetic: applying every transform to every figure invites false positives,
+ * where a dollar amount happens to equal some unrelated ratio scaled up. A
+ * figure with no unit keeps the older permissive set, since a bare number is
+ * genuinely ambiguous (a count, a ratio, or cents).
  *
  * Tolerance is *half a unit in the last expressed place*, which is exactly the
  * rounding rule a human follows. "36.7%" admits anything in [36.65, 36.75);
@@ -51,33 +61,51 @@ const DATE_PATTERN = /\b\d{4}-\d{2}(?:-\d{2})?\b/g;
  *   Without that, "in Q1, up 15%" yields a phantom figure of "1,".
  */
 const NUMBER_PATTERN =
-    /(?<![A-Za-z0-9.])-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:%|[KMB]\b)?/g;
+    /(?<![A-Za-z0-9.])-?\$?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:%|[KMB]\b|bps?\b)?/g;
 
 const MAGNITUDE = { K: 1e3, M: 1e6, B: 1e9 };
 
 /**
- * Parse one prose number into its value and the precision it was written to.
+ * The unit a prose figure was written in, inferred from its symbols. This
+ * selects which transforms are legitimate when matching it to the data.
+ *
+ * @param {string} text
+ * @returns {'percent'|'bps'|'currency'|'plain'}
+ */
+function unitOf(text) {
+    if (text.includes('%')) return 'percent';
+    if (/\bbps?\b/i.test(text)) return 'bps';
+    if (text.includes('$')) return 'currency';
+    return 'plain';
+}
+
+/**
+ * Parse one prose number into its value, the precision it was written to, and
+ * the unit it was expressed in.
  *
  * `ulp` is the unit in the last place — the granularity the writer expressed.
  * For "36.7" that is 0.1; for "563K" it is 1000; for "42" it is 1.
  *
  * @param {string} raw
- * @returns {{ value: number, ulp: number, isPercent: boolean } | null}
+ * @returns {{ value: number, ulp: number, unit: string, isPercent: boolean } | null}
  */
 export function parseProseNumber(raw) {
     const text = raw.trim();
-    const isPercent = text.includes('%');
+    const unit = unitOf(text);
     const suffixMatch = text.match(/([KMB])\b/);
     const magnitude = suffixMatch ? MAGNITUDE[suffixMatch[1]] : 1;
 
-    const digits = text.replace(/[$,%\s]/g, '').replace(/[KMB]\b/, '');
+    const digits = text
+        .replace(/[$,%\s]/g, '')
+        .replace(/[KMB]\b/, '')
+        .replace(/bps?/i, '');
     const value = Number.parseFloat(digits);
     if (!Number.isFinite(value)) return null;
 
     const decimals = digits.includes('.') ? digits.split('.')[1].length : 0;
     const ulp = Math.pow(10, -decimals) * magnitude;
 
-    return { value: value * magnitude, ulp, isPercent };
+    return { value: value * magnitude, ulp, unit, isPercent: unit === 'percent' };
 }
 
 /**
@@ -127,20 +155,43 @@ export function resultValues(rows) {
     return values;
 }
 
+const IDENTITY = ['identity', (v) => v];
+const CENTS_TO_UNITS = ['cents_to_units', (v) => v / 100];
+const RATIO_TO_PERCENT = ['ratio_to_percent', (v) => v * 100];
+const RATIO_TO_BPS = ['ratio_to_bps', (v) => v * 10000];
+const PERCENT_TO_BPS = ['percent_to_bps', (v) => v * 100];
+
+/**
+ * The transforms worth trying for a figure written in a given unit. Narrower
+ * than "all of them" on purpose — see the module header on false positives.
+ *
+ * @param {string} unit
+ * @returns {Array<[string, (v: number) => number]>}
+ */
+function transformsFor(unit) {
+    switch (unit) {
+        case 'percent':
+            return [IDENTITY, RATIO_TO_PERCENT];
+        case 'bps':
+            return [IDENTITY, PERCENT_TO_BPS, RATIO_TO_BPS];
+        case 'currency':
+            return [IDENTITY, CENTS_TO_UNITS];
+        default:
+            // A bare number is ambiguous: a count, a ratio, or a cents amount.
+            return [IDENTITY, CENTS_TO_UNITS, RATIO_TO_PERCENT];
+    }
+}
+
 /**
  * Does a prose number correspond to some value the query returned?
  *
- * @param {{ value: number, ulp: number }} prose
+ * @param {{ value: number, ulp: number, unit?: string }} prose
  * @param {number[]} candidates
  * @returns {{ grounded: boolean, source: number|null, via: string|null }}
  */
 function locate(prose, candidates) {
     const tolerance = prose.ulp / 2;
-    const transforms = [
-        ['identity', (v) => v],
-        ['cents_to_units', (v) => v / 100],
-        ['ratio_to_percent', (v) => v * 100],
-    ];
+    const transforms = transformsFor(prose.unit ?? 'plain');
 
     for (const candidate of candidates) {
         for (const [via, transform] of transforms) {

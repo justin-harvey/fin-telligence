@@ -95,14 +95,51 @@ test('empty narration has nothing to flag', () => {
     assert.equal(result.checked, 0);
 });
 
-test('parseProseNumber reports value and expressed precision', () => {
-    assert.deepEqual(parseProseNumber('$1.2M'), { value: 1_200_000, ulp: 100_000, isPercent: false });
-    assert.deepEqual(parseProseNumber('36.7%'), { value: 36.7, ulp: 0.1, isPercent: true });
-    assert.deepEqual(parseProseNumber('563K'), { value: 563_000, ulp: 1_000, isPercent: false });
-    assert.deepEqual(parseProseNumber('42'), { value: 42, ulp: 1, isPercent: false });
+test('parseProseNumber reports value, expressed precision, and unit', () => {
+    assert.deepEqual(parseProseNumber('$1.2M'), { value: 1_200_000, ulp: 100_000, unit: 'currency', isPercent: false });
+    assert.deepEqual(parseProseNumber('36.7%'), { value: 36.7, ulp: 0.1, unit: 'percent', isPercent: true });
+    assert.deepEqual(parseProseNumber('563K'), { value: 563_000, ulp: 1_000, unit: 'plain', isPercent: false });
+    assert.deepEqual(parseProseNumber('42'), { value: 42, ulp: 1, unit: 'plain', isPercent: false });
+    assert.deepEqual(parseProseNumber('125 bps'), { value: 125, ulp: 1, unit: 'bps', isPercent: false });
 });
 
 test('extractNumbers finds every claim in a paragraph', () => {
     const found = extractNumbers('Revenue was $1,200 in Q1, up 15.5%, across 3 regions.');
     assert.deepEqual(found.map((n) => n.raw), ['$1,200', '15.5%', '3']);
+});
+
+test('grounds a figure written in basis points against a stored ratio', () => {
+    // A take-rate stored as the ratio 0.0125 is legitimately narrated as
+    // "125 bps": ratio_to_bps (x10000) is the transform that bridges them.
+    const rows = [{ take_rate: 0.0125 }];
+    const result = checkGrounding({ narration: 'The take rate was 125 bps.', rows });
+    assert.ok(result.ok, `flagged: ${JSON.stringify(result.ungrounded)}`);
+    assert.equal(result.grounded[0].via, 'ratio_to_bps');
+});
+
+test('grounds basis points quoted from a percentage', () => {
+    const rows = [{ spread_pct: 1.25 }];
+    const result = checkGrounding({ narration: 'The spread widened to 125 bps.', rows });
+    assert.ok(result.ok);
+    assert.equal(result.grounded[0].via, 'percent_to_bps');
+});
+
+test('unit-awareness stops a currency figure grounding against an unrelated ratio', () => {
+    // Without unit-aware transforms, "$42" (42) would match the ratio 0.42 via
+    // ratio_to_percent. A dollar amount is not a percentage, so it must not.
+    const rows = [{ some_ratio: 0.42 }];
+    const result = checkGrounding({ narration: 'That line item was $42.', rows });
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.ungrounded.map((n) => n.raw), ['$42']);
+});
+
+test('grounds a computed growth figure returned as its own column', () => {
+    // The compute-in-SQL contract: the growth % is a returned cell, so the
+    // narration that quotes it grounds as a plain membership check.
+    const rows = [{ start_cents: 3_585_700, end_cents: 32_476_072, growth_pct: 805.7 }];
+    const result = checkGrounding({
+        narration: 'MRR grew 805.7%, from $35,857.00 to $324,760.72.',
+        rows,
+    });
+    assert.ok(result.ok, `flagged: ${JSON.stringify(result.ungrounded)}`);
 });

@@ -64,6 +64,13 @@ Rules:
 - Include ORDER BY when the answer has a natural order; a stable order makes the result
   reproducible.
 - Return at most a few hundred rows. Aggregate rather than dumping raw rows.
+- Compute EVERY figure the answer will state INSIDE this query, returned as its own column.
+  That includes derived figures: deltas, period-over-period growth, ratios, retention,
+  spreads, averages. Do not leave arithmetic for the narration to perform — a number the
+  query did not return cannot be verified against the data and will be rejected. For a
+  "how much did X grow" question, return the start value, the end value, AND the computed
+  change (and growth %, if asked) as separate columns. Round percentages/ratios in SQL to the
+  precision the answer will quote (e.g. ROUND((end - start) * 100.0 / start, 1) AS growth_pct).
 - If the question cannot be answered from this schema, still return your best SELECT and say
   so plainly in the interpretation field.
 `.trim();
