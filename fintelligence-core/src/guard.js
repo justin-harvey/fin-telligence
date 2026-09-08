@@ -259,6 +259,13 @@ export function guard(sql, options = {}) {
             lowered[table.toLowerCase()] = new Set(cols.map((c) => c.toLowerCase()));
             for (const c of cols) union.add(c.toLowerCase());
         }
+        // Output aliases (SELECT ... AS x) are names the query defines, not
+        // stored columns; a HAVING or ORDER BY that refers to one must not be
+        // read as touching a forbidden column — the same treatment CTE names get.
+        const aliases = new Set();
+        for (const column of statement.columns ?? []) {
+            if (column && typeof column.as === 'string' && column.as) aliases.add(column.as.toLowerCase());
+        }
         for (const entry of parsed.columnList) {
             const [, rawTable, rawColumn] = entry.split('::');
             const column = String(rawColumn).toLowerCase();
@@ -269,6 +276,7 @@ export function guard(sql, options = {}) {
                 );
             }
             const table = rawTable && rawTable !== 'null' ? rawTable.toLowerCase() : null;
+            if (!table && aliases.has(column)) continue;
             const permitted = table ? lowered[table]?.has(column) ?? false : union.has(column);
             if (!permitted) {
                 throw new SqlRejected(

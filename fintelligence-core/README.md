@@ -113,11 +113,45 @@ real deployment anchors the head hash somewhere it does not control. That is
 what [TLaaS](https://github.com/justin-harvey/TLaaS) already does — this log is
 the same construction minus the on-chain step, and the two compose directly.
 
+## Trade-surveillance attestation
+
+The SaaS warehouse shows the engine works. A second warehouse shows it where
+the thesis matters most: capital markets, where "roughly right, trust me" is
+not an answer a regulator accepts. The same guard, grounding, lineage and audit
+chain are pointed at a different schema and allow-list — the boundary is
+identical, only the domain changes.
+
+```bash
+node bin/fintel.js markets seed                    # orders, executions, prices, positions
+node bin/fintel.js markets net-position ACME       # net position at close, pinned as-of and hashed
+node bin/fintel.js markets surveillance            # flag rapid place-and-cancel accounts
+node bin/fintel.js markets audit                   # verify the surveillance/position audit chain
+```
+
+Three scenarios, framed against real regimes:
+
+| Scenario | Question | Regime it speaks to |
+|----------|----------|---------------------|
+| **Net position at close** | Signed position per account in a ticker, as of the close timestamp | MiFID II position reporting; reproducible from the execution ledger and reconciled against the end-of-day snapshot |
+| **Rapid place-and-cancel** | Accounts that cancelled ≥ N orders within Y ms of placing them | MAR / MiFID II market-abuse surveillance (the shape spoofing and layering leave) |
+| **Tamper test** | Alter a historical alert and re-verify | The audit chain reports the exact entry that changed |
+
+Two things make these more than a report. The net-position figure is computed
+*in SQL* and pinned with an as-of cutoff, so re-running it reproduces the same
+result hash exactly — an auditor can recompute and compare. And every alert is
+appended to the hash-chained, optionally-signed log, so a surveillance finding
+cannot be quietly walked back after the fact. The data is synthetic and
+deterministic; two of the six accounts are seeded to exhibit the place-and-cancel
+pattern, and the surveillance query flags exactly those two.
+
 ## What is real here, and what is not
 
-**Real:** the guard, the read-only enforcement, the SQLite warehouse, lineage
-capture and hashing, the audit chain, grounding verification, the CLI, and 43
-tests that run offline.
+**Real:** the guard (table *and* column allow-lists, a wall-clock query budget,
+an optional row-level scope hook), read-only enforcement, two SQLite warehouses
+(SaaS finance and capital markets), lineage capture and hashing, the
+hash-chained audit log with Ed25519 signing and a pluggable external-anchoring
+hook, grounding verification (unit-aware, and able to check derived figures the
+query returns), the CLI, and 77 tests that run offline.
 
 **Synthetic:** the data. 416 customers over six months, generated
 deterministically from a fixed seed so that the same question always produces
@@ -127,12 +161,19 @@ company. For a tool about traceable figures, fabricated data clearly labelled
 as fabricated is fine. Fabricated data presented as real is the exact failure
 this project exists to prevent.
 
-**Not built:** authentication and per-user authorization, a real warehouse
-connector (BigQuery/Snowflake), the pre-built metric fabric mapped to
-Stripe/NetSuite schema, PII detection for the GDPR annotation, and any UI. The
-audit entries carry `SOX` and `GDPR: no PII` tags because the query path is
-read-only over a schema with no personal data — that is a true statement about
-*this* configuration, not a compliance claim.
+**Foundations in place, not yet load-bearing:** the guard has a row-level scope
+hook (a mandatory predicate bound per principal) and the markets demo has a
+canonical metric layer (`net_position`, `notional`, `vwap`). These are the seeds
+of authenticated per-user authorization and a formal semantic layer; they are
+wired but not yet enforced behind real identity.
+
+**Not built:** authentication and the identity that would drive the scope hook,
+a real warehouse connector (BigQuery/Snowflake — the DB access is still direct
+`node:sqlite`), PII detection for the GDPR annotation, a real external anchor
+(only a local stub ships; the interface is real), and any UI. The audit entries
+carry `SOX` and `GDPR: no PII` tags because the query path is read-only over a
+schema with no personal data — that is a true statement about *this*
+configuration, not a compliance claim.
 
 ## On compliance vocabulary
 
@@ -151,17 +192,21 @@ its result, and a chain that shows the record has not been edited since.
 ## Layout
 
 ```
-db/schema.sql        four tables; money in integer cents, never floats
-src/db.js            read-only connection + deterministic seed
-src/guard.js         the security boundary
-src/planner.js       question → SQL (structured output, Claude Opus 4.8)
-src/narrator.js      rows → prose, with grounded retry and safe fallback
-src/grounding.js     numeric verification
-src/lineage.js       canonical serialisation + result hashing
-src/audit.js         hash-chained log + export package
-src/ask.js           the pipeline
-bin/fintel.js        CLI
-test/                43 tests, none requiring a credential
+db/schema.sql          SaaS warehouse: four tables; money in integer cents
+db/markets-schema.sql  markets warehouse: accounts, orders, executions, prices, positions
+src/db.js              read-only connection, deterministic seed, wall-clock query budget
+src/guard.js           the security boundary (table + column allow-lists, scope/as-of hooks)
+src/planner.js         question → SQL (structured output, Claude Opus 4.8)
+src/narrator.js        rows → prose, with grounded retry and safe fallback
+src/grounding.js       unit-aware numeric verification
+src/lineage.js         canonical serialisation + result hashing
+src/audit.js           hash-chained log + export package
+src/signing.js         Ed25519 result signing (keys from the environment)
+src/anchor.js          pluggable external-anchoring hook + local stub
+src/markets.js         capital-markets warehouse, metric layer, surveillance scenarios
+src/ask.js             the pipeline
+bin/fintel.js          CLI
+test/                  77 tests, none requiring a credential
 ```
 
 Requires Node 22+ (`node:sqlite` is built in, so there is no native database

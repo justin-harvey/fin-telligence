@@ -6,6 +6,8 @@ node_modules/
 *.db-journal
 *.db-wal
 *.db-shm
+# Generated audit logs (the schema/seed are source; the logs are runtime output)
+*.jsonl
 
 # Secrets and local env
 .env

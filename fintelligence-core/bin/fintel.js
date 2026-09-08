@@ -16,6 +16,13 @@ import { ask } from '../src/ask.js';
 import { verify, readLog, exportPackage, headHash } from '../src/audit.js';
 import { loadSigner } from '../src/signing.js';
 import { anchorHead, localStubAnchor } from '../src/anchor.js';
+import {
+    seedMarkets,
+    netPositionAtClose,
+    surveillanceRapidCancels,
+    MARKETS_LOG_PATH,
+    TRADING_DATE,
+} from '../src/markets.js';
 
 const [, , command, ...rest] = process.argv;
 
@@ -160,13 +167,85 @@ async function main() {
             break;
         }
 
+        case 'markets': {
+            const sub = rest[0];
+            const signer = loadSigner();
+            switch (sub) {
+                case 'seed': {
+                    const result = seedMarkets();
+                    console.log(
+                        `Seeded markets warehouse: ${result.accounts} accounts, ` +
+                            `${result.orders} orders, ${result.executions} executions (session ${TRADING_DATE}).`,
+                    );
+                    console.log('Synthetic and deterministic; two accounts exhibit a rapid place-and-cancel pattern.');
+                    break;
+                }
+                case 'net-position': {
+                    const ticker = rest[1];
+                    if (!ticker) {
+                        console.error('Usage: fintel markets net-position <TICKER>');
+                        process.exitCode = 2;
+                        return;
+                    }
+                    const { rows, lineage, entry } = netPositionAtClose({ ticker: ticker.toUpperCase(), signer });
+                    console.log(`\nNet position in ${ticker.toUpperCase()} as of market close (${TRADING_DATE})\n`);
+                    printRows(rows);
+                    console.log('\nProvenance');
+                    console.log('  as-of           :', new Date(lineage.asOf.value).toISOString());
+                    console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
+                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                    console.log('  signature       :', entry.signature ? `signed (key ${entry.signingKeyId})` : 'unsigned');
+                    break;
+                }
+                case 'surveillance': {
+                    const { rows, entry } = surveillanceRapidCancels({ signer });
+                    console.log('\nMarket-abuse surveillance — rapid place-and-cancel (spoofing/layering)\n');
+                    if (rows.length === 0) {
+                        console.log('  No accounts breached the threshold.');
+                    } else {
+                        printRows(rows);
+                        console.log('\n  ALERT: ' + rows.length + ' account(s) flagged for review.');
+                    }
+                    console.log('\nProvenance');
+                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                    console.log('  compliance tags :', entry.complianceTags.join(' · '));
+                    break;
+                }
+                case 'audit': {
+                    const verifier = signer ? { publicKey: signer.publicKey } : null;
+                    const integrity = verify(MARKETS_LOG_PATH, { verifier });
+                    console.log(
+                        `Markets audit chain: ${integrity.entries} entries — ${integrity.ok ? 'INTACT' : 'BROKEN'}` +
+                            `${verifier ? ' (signatures checked)' : ''}`,
+                    );
+                    if (!integrity.ok) {
+                        console.log(`  broken at entry ${integrity.brokenAt}: ${integrity.reason}`);
+                        process.exitCode = 1;
+                    }
+                    for (const item of readLog(MARKETS_LOG_PATH)) {
+                        console.log(`  #${String(item.seq).padStart(3)}  ${item.scenario ?? 'query'}  ${item.question}`);
+                    }
+                    break;
+                }
+                default:
+                    console.log('Usage:');
+                    console.log('  fintel markets seed                    build the markets warehouse');
+                    console.log('  fintel markets net-position <TICKER>   net position at close, attested');
+                    console.log('  fintel markets surveillance            flag rapid place-and-cancel accounts');
+                    console.log('  fintel markets audit                   verify the markets audit chain');
+                    process.exitCode = sub ? 2 : 0;
+            }
+            break;
+        }
+
         default:
             console.log('Usage:');
-            console.log('  fintel seed                      build the demo warehouse');
+            console.log('  fintel seed                      build the SaaS demo warehouse');
             console.log('  fintel ask "question"            answer a question, record lineage');
             console.log('  fintel explain "SELECT ..."      run the guard alone, no model call');
             console.log('  fintel audit                     verify the hash chain, list entries');
             console.log('  fintel audit --export out.json   write the audit package');
+            console.log('  fintel markets <sub>             capital-markets surveillance demo');
             process.exitCode = command ? 2 : 0;
     }
 }
