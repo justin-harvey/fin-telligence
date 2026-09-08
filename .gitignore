@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Generated / seeded artifacts
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Secrets and local env
+.env
+.env.*
+*.pem
+*.key
+
+# OS / editor cruft
+.DS_Store

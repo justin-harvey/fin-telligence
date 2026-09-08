@@ -154,7 +154,7 @@ its result, and a chain that shows the record has not been edited since.
 db/schema.sql        four tables; money in integer cents, never floats
 src/db.js            read-only connection + deterministic seed
 src/guard.js         the security boundary
-src/planner.js       question → SQL (structured output, Claude Opus 5)
+src/planner.js       question → SQL (structured output, Claude Opus 4.8)
 src/narrator.js      rows → prose, with grounded retry and safe fallback
 src/grounding.js     numeric verification
 src/lineage.js       canonical serialisation + result hashing

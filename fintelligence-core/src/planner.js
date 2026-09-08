@@ -22,7 +22,7 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
 import { ALLOWED_TABLES } from './guard.js';
 
-export const MODEL = 'claude-opus-5';
+export const MODEL = 'claude-opus-4-8';
 
 const PlanSchema = z.object({
     sql: z.string().describe('A single SQLite SELECT statement answering the question.'),
