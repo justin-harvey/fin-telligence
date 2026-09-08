@@ -15,13 +15,15 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { openReadOnly, runQuery, QueryTimeout } from './db.js';
+import { QueryTimeout } from './db.js';
+import { SqliteWarehouse } from './warehouse.js';
 import { guard, SqlRejected } from './guard.js';
 import { plan } from './planner.js';
 import { narrate } from './narrator.js';
 import { buildLineage } from './lineage.js';
 import { append } from './audit.js';
 import { loadSigner } from './signing.js';
+import { scopeForPrincipal } from './auth.js';
 
 /**
  * Answer one question end to end.
@@ -37,6 +39,10 @@ import { loadSigner } from './signing.js';
  *   answer as it stood at a point in time (injected as `column <= value`)
  * @param {object|null} [options.signer] key to sign the attestation; defaults to
  *   one loaded from the environment, or null when none is configured
+ * @param {import('./auth.js').Principal|null} [options.principal] when supplied,
+ *   the query is confined to this principal's scope (row-level security)
+ * @param {{ query: Function }} [options.warehouse] connector to run the query
+ *   against; defaults to the local read-only SQLite adapter
  * @returns {Promise<object>}
  */
 export async function ask(question, {
@@ -47,12 +53,16 @@ export async function ask(question, {
     skipNarration = false,
     asOf = null,
     signer = loadSigner(),
+    principal = null,
+    warehouse = new SqliteWarehouse(dbPath),
 } = {}) {
     const planned = await plan(question, { client });
 
+    const scope = principal ? scopeForPrincipal(principal) : null;
+
     let guarded;
     try {
-        guarded = guard(planned.sql, { asOf });
+        guarded = guard(planned.sql, { asOf, scope });
     } catch (error) {
         if (error instanceof SqlRejected) {
             return {
@@ -68,13 +78,12 @@ export async function ask(question, {
         throw error;
     }
 
-    const db = openReadOnly(dbPath);
     let rows;
     try {
-        rows = runQuery(db, guarded.sql, { params: guarded.params });
+        rows = warehouse.query(guarded.sql, { params: guarded.params });
     } catch (error) {
         // A query that ran past its wall-clock budget is an availability
-        // outcome, distinct from a statement SQLite refused to run.
+        // outcome, distinct from a statement the warehouse refused to run.
         if (error instanceof QueryTimeout) {
             return {
                 ok: false,
@@ -86,9 +95,9 @@ export async function ask(question, {
                 interpretation: planned.interpretation,
             };
         }
-        // Reaching here means the guard approved a statement SQLite would not
-        // run — a syntax quirk, an unknown column, or (importantly) a write
-        // the read-only connection refused. Worth surfacing distinctly.
+        // Reaching here means the guard approved a statement the warehouse
+        // would not run — a syntax quirk, an unknown column, or (importantly) a
+        // write the read-only connection refused. Worth surfacing distinctly.
         return {
             ok: false,
             stage: 'execute',
@@ -98,8 +107,6 @@ export async function ask(question, {
             proposedSql: guarded.sql,
             interpretation: planned.interpretation,
         };
-    } finally {
-        db.close();
     }
 
     const narration = skipNarration

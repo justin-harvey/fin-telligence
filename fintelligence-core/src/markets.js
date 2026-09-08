@@ -20,10 +20,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openReadOnly, runQuery } from './db.js';
 import { guard } from './guard.js';
 import { buildLineage } from './lineage.js';
 import { append } from './audit.js';
+import { marketsRegistry } from './registry.js';
+import { SqliteWarehouse } from './warehouse.js';
+import { scopeForPrincipal } from './auth.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const MARKETS_SCHEMA_PATH = join(here, '..', 'db', 'markets-schema.sql');
@@ -55,25 +57,15 @@ export const MARKETS_ALLOWED_COLUMNS = Object.freeze({
 });
 
 /**
- * The canonical metric layer: blessed SQL fragments so a figure is always
- * computed one way. The seed of the semantic registry M5 formalises. These are
- * code-controlled expressions, not user input, so interpolating them into a
- * query is safe; the guard still validates the assembled statement.
+ * The canonical metric layer, now sourced from the first-class registry so
+ * there is a single definition of each metric. These are code-controlled
+ * expressions, not user input, so interpolating them into a query is safe; the
+ * guard still validates the assembled statement.
  */
-export const MARKETS_METRICS = Object.freeze({
-    net_position: {
-        description: 'Signed share position: buys add, sells subtract, over executions.',
-        sql: "SUM(CASE WHEN side = 'buy' THEN qty ELSE -qty END)",
-    },
-    notional_cents: {
-        description: 'Executed notional in cents: shares times execution price, summed.',
-        sql: 'SUM(qty * price_cents)',
-    },
-    vwap_cents: {
-        description: 'Volume-weighted average execution price, in cents.',
-        sql: 'CAST(SUM(qty * price_cents) AS REAL) / SUM(qty)',
-    },
-});
+export const MARKETS_REGISTRY = marketsRegistry();
+export const MARKETS_METRICS = Object.freeze(
+    Object.fromEntries(MARKETS_REGISTRY.list().map((metric) => [metric.name, metric])),
+);
 
 /** Reference close prices (cents) for the seeded tickers. */
 const TICKERS = [
@@ -217,12 +209,18 @@ const guardOptions = { allowedTables: MARKETS_ALLOWED_TABLES, allowedColumns: MA
  * point in time, and the canonical net_position metric so it is computed one
  * way. Records lineage and appends a (optionally signed) audit entry.
  *
+ * A principal, when supplied, confines the result to that principal's book via
+ * the guard's scope hook: a trader sees only their own account, a supervisor
+ * (null scope) sees the whole book.
+ *
  * @param {object} params
  * @param {string} params.ticker
  * @param {number} [params.asOfMs]
  * @param {string} [params.dbPath]
  * @param {string} [params.logPath]
  * @param {object|null} [params.signer]
+ * @param {import('./auth.js').Principal|null} [params.principal]
+ * @param {{ query: Function }} [params.warehouse]
  * @returns {{ rows: object[], lineage: object, entry: object }}
  */
 export function netPositionAtClose({
@@ -231,21 +229,22 @@ export function netPositionAtClose({
     dbPath = MARKETS_DB_PATH,
     logPath = MARKETS_LOG_PATH,
     signer = null,
+    principal = null,
+    warehouse = new SqliteWarehouse(dbPath),
 }) {
+    const scope = principal ? scopeForPrincipal(principal) : null;
     const baseSql =
-        `SELECT account_id, ticker, ${MARKETS_METRICS.net_position.sql} AS net_qty ` +
+        `SELECT account_id, ticker, ${MARKETS_REGISTRY.resolve('net_position').sql} AS net_qty ` +
         'FROM executions WHERE ticker = ? GROUP BY account_id, ticker ORDER BY account_id';
-    const guarded = guard(baseSql, { ...guardOptions, asOf: { column: 'executed_at_ms', value: asOfMs } });
+    const guarded = guard(baseSql, {
+        ...guardOptions,
+        scope,
+        asOf: { column: 'executed_at_ms', value: asOfMs },
+    });
 
-    const db = openReadOnly(dbPath);
-    let rows;
-    try {
-        // The query's own ticker parameter comes first in the text, then the
-        // injected as-of parameter — bind in that order.
-        rows = runQuery(db, guarded.sql, { params: [ticker, ...guarded.params] });
-    } finally {
-        db.close();
-    }
+    // The query's own ticker parameter comes first in the text; the guard's
+    // injected parameters (scope, then as-of) follow in that order.
+    const rows = warehouse.query(guarded.sql, { params: [ticker, ...guarded.params] });
 
     const lineage = buildLineage({
         question: `Net position in ${ticker} as of ${new Date(asOfMs).toISOString()}`,
@@ -274,6 +273,8 @@ export function netPositionAtClose({
  * @param {string} [params.dbPath]
  * @param {string} [params.logPath]
  * @param {object|null} [params.signer]
+ * @param {import('./auth.js').Principal|null} [params.principal]
+ * @param {{ query: Function }} [params.warehouse]
  * @returns {{ rows: object[], lineage: object, entry: object }}
  */
 export function surveillanceRapidCancels({
@@ -282,21 +283,29 @@ export function surveillanceRapidCancels({
     dbPath = MARKETS_DB_PATH,
     logPath = MARKETS_LOG_PATH,
     signer = null,
+    principal = null,
+    warehouse = new SqliteWarehouse(dbPath),
 } = {}) {
+    const scope = principal ? scopeForPrincipal(principal) : null;
+
+    // The window and threshold are code-controlled integers, so they are
+    // inlined rather than bound. This keeps the only bound parameter the
+    // guard-injected scope: mixing the query's own placeholders with an
+    // injected one whose position falls between them (the WHERE predicate lands
+    // before the HAVING threshold) would break positional binding.
+    const window = Number(windowMs);
+    const threshold = Number(minCancels);
+    if (!Number.isInteger(window) || !Number.isInteger(threshold)) {
+        throw new Error('surveillance thresholds must be integers');
+    }
     const sql =
         'SELECT account_id, COUNT(*) AS rapid_cancels ' +
         'FROM orders ' +
-        'WHERE canceled_at_ms IS NOT NULL AND (canceled_at_ms - placed_at_ms) <= ? ' +
-        'GROUP BY account_id HAVING COUNT(*) >= ? ORDER BY rapid_cancels DESC, account_id';
-    const guarded = guard(sql, guardOptions);
+        `WHERE canceled_at_ms IS NOT NULL AND (canceled_at_ms - placed_at_ms) <= ${window} ` +
+        `GROUP BY account_id HAVING COUNT(*) >= ${threshold} ORDER BY rapid_cancels DESC, account_id`;
+    const guarded = guard(sql, { ...guardOptions, scope });
 
-    const db = openReadOnly(dbPath);
-    let rows;
-    try {
-        rows = runQuery(db, guarded.sql, { params: [windowMs, minCancels] });
-    } finally {
-        db.close();
-    }
+    const rows = warehouse.query(guarded.sql, { params: guarded.params });
 
     const lineage = buildLineage({
         question: `Accounts with >= ${minCancels} cancellations within ${windowMs}ms of placement`,

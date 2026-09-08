@@ -147,11 +147,13 @@ pattern, and the surveillance query flags exactly those two.
 ## What is real here, and what is not
 
 **Real:** the guard (table *and* column allow-lists, a wall-clock query budget,
-an optional row-level scope hook), read-only enforcement, two SQLite warehouses
-(SaaS finance and capital markets), lineage capture and hashing, the
+a row-level scope hook driven by an authenticated principal), read-only
+enforcement behind a warehouse-connector interface (SQLite reference adapter),
+two SQLite warehouses (SaaS finance and capital markets), a first-class metric
+registry the scenarios resolve against, lineage capture and hashing, the
 hash-chained audit log with Ed25519 signing and a pluggable external-anchoring
 hook, grounding verification (unit-aware, and able to check derived figures the
-query returns), the CLI, and 77 tests that run offline.
+query returns), the CLI, and 88 tests that run offline.
 
 **Synthetic:** the data. 416 customers over six months, generated
 deterministically from a fixed seed so that the same question always produces
@@ -161,19 +163,20 @@ company. For a tool about traceable figures, fabricated data clearly labelled
 as fabricated is fine. Fabricated data presented as real is the exact failure
 this project exists to prevent.
 
-**Foundations in place, not yet load-bearing:** the guard has a row-level scope
-hook (a mandatory predicate bound per principal) and the markets demo has a
-canonical metric layer (`net_position`, `notional`, `vwap`). These are the seeds
-of authenticated per-user authorization and a formal semantic layer; they are
-wired but not yet enforced behind real identity.
+**Reference implementations, real but not production-grade:** authentication and
+row-level security resolve a token to a principal and confine that principal to
+its book via the guard's scope hook — the mechanism is enforced and tested, but
+the token registry is an in-memory demo, not an IdP. The warehouse connector is
+a live interface with a working SQLite adapter and a Snowflake adapter *shape*
+(no network integration ships). The metric registry is first-class and the
+scenarios resolve against it. The external anchor is a real interface with a
+local stub.
 
-**Not built:** authentication and the identity that would drive the scope hook,
-a real warehouse connector (BigQuery/Snowflake — the DB access is still direct
-`node:sqlite`), PII detection for the GDPR annotation, a real external anchor
-(only a local stub ships; the interface is real), and any UI. The audit entries
-carry `SOX` and `GDPR: no PII` tags because the query path is read-only over a
-schema with no personal data — that is a true statement about *this*
-configuration, not a compliance claim.
+**Not built:** a real IdP behind the auth layer, a live cloud-warehouse adapter,
+PII detection for the GDPR annotation, a production external anchor, and any UI.
+The audit entries carry `SOX` and `GDPR: no PII` tags because the query path is
+read-only over a schema with no personal data — that is a true statement about
+*this* configuration, not a compliance claim.
 
 ## On compliance vocabulary
 
@@ -203,10 +206,13 @@ src/lineage.js         canonical serialisation + result hashing
 src/audit.js           hash-chained log + export package
 src/signing.js         Ed25519 result signing (keys from the environment)
 src/anchor.js          pluggable external-anchoring hook + local stub
+src/warehouse.js       connector interface: SQLite adapter + Snowflake shape
+src/registry.js        first-class metric / semantic registry
+src/auth.js            authentication + per-principal row-level security
 src/markets.js         capital-markets warehouse, metric layer, surveillance scenarios
 src/ask.js             the pipeline
 bin/fintel.js          CLI
-test/                  77 tests, none requiring a credential
+test/                  88 tests, none requiring a credential
 ```
 
 Requires Node 22+ (`node:sqlite` is built in, so there is no native database

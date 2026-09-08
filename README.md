@@ -3,7 +3,7 @@
 **Financial answers you can audit. The model writes SQL, the database produces the numbers, and every figure in the answer is verified against the data before you see it.**
 
 [![Prototype](https://img.shields.io/badge/prototype-live-brightgreen.svg)](https://fin-telligence.netlify.app/)
-[![Core tests](https://img.shields.io/badge/core-43%20tests%2C%20offline-blue.svg)](fintelligence-core/)
+[![Core tests](https://img.shields.io/badge/core-88%20tests%2C%20offline-blue.svg)](fintelligence-core/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 The premise is simple: a language model is excellent at turning a question into SQL, and terrible at being trusted with the arithmetic. So it is never trusted with the arithmetic. The model writes a query, a read-only database returns the rows, and a verifier checks that every number in the prose actually came from those rows. What you get back is either a grounded answer with a full provenance trail, or an explicit refusal. Never an unverified paragraph presented as fact.
@@ -22,7 +22,7 @@ question
 
 | Path | What it is |
 |------|-----------|
-| [`fintelligence-core/`](fintelligence-core/) | **The working engine.** A Node.js CLI and library that implements the full pipeline above: guard, read-only warehouse, grounding verifier, lineage capture, and a tamper-evident audit chain. 43 tests, no API credential required to run most of them. |
+| [`fintelligence-core/`](fintelligence-core/) | **The working engine.** A Node.js CLI and library that implements the full pipeline above: guard, read-only warehouse, grounding verifier, lineage capture, and a tamper-evident audit chain. 88 tests, no API credential required to run most of them. |
 | [`fintelligence/`](fintelligence/) | **The prototype site** deployed at [fin-telligence.netlify.app](https://fin-telligence.netlify.app/). It argues for the thesis; the core repository does it. |
 
 The prototype makes the case. The core makes it executable. Start with the [`fintelligence-core/` README](fintelligence-core/README.md) for the full technical account.
@@ -44,7 +44,7 @@ A claim is only worth what enforces it. Each guarantee is backed by a mechanism 
 cd fintelligence-core
 npm install
 npm run seed                      # build the demo warehouse
-npm test                          # 43 tests, no credential required
+npm test                          # 88 tests, no credential required
 
 export ANTHROPIC_API_KEY=...      # only planning and narration call a model
 node bin/fintel.js ask "How has MRR trended over the period?"
