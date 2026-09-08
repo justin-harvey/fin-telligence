@@ -32,6 +32,53 @@ export function openReadOnly(path = DEFAULT_DB_PATH) {
     return new DatabaseSync(path, { readOnly: true });
 }
 
+/** Default wall-clock budget for a single query, in milliseconds. */
+export const DEFAULT_QUERY_TIMEOUT_MS = 5000;
+
+export class QueryTimeout extends Error {
+    /** @param {number} ms */
+    constructor(ms) {
+        super(`Query exceeded the ${ms} ms execution budget and was aborted.`);
+        this.name = 'QueryTimeout';
+        this.reason = 'timeout';
+        this.timeoutMs = ms;
+    }
+}
+
+/**
+ * Run a read-only query under a wall-clock budget.
+ *
+ * A LIMIT bounds the rows returned, not the work done to produce them: a cross
+ * join is computed in full before LIMIT trims it. This steps the result with
+ * `iterate()` and checks the deadline as each row arrives, so a query that
+ * streams past its budget is aborted rather than allowed to run unbounded.
+ *
+ * The honest limitation: node:sqlite exposes no interrupt or progress handler,
+ * so a single step that blocks — one enormous aggregation with no rows emitted
+ * until it finishes — cannot be preempted here. The read-only handle, the table
+ * and column allow-lists, and the injected LIMIT together bound that case; this
+ * timeout covers the far more common "produces far too many rows" shape.
+ *
+ * @param {DatabaseSync} db
+ * @param {string} sql
+ * @param {object} [options]
+ * @param {Array<string|number>} [options.params] positional bind parameters
+ * @param {number} [options.timeoutMs]
+ * @returns {Array<object>}
+ * @throws {QueryTimeout}
+ */
+export function runQuery(db, sql, { params = [], timeoutMs = DEFAULT_QUERY_TIMEOUT_MS } = {}) {
+    const statement = db.prepare(sql);
+    const deadline = Date.now() + timeoutMs;
+    const rows = [];
+    for (const row of statement.iterate(...params)) {
+        if (Date.now() > deadline) throw new QueryTimeout(timeoutMs);
+        // node:sqlite yields null-prototype objects; normalise on the way out.
+        rows.push({ ...row });
+    }
+    return rows;
+}
+
 /**
  * A small deterministic PRNG (mulberry32).
  *

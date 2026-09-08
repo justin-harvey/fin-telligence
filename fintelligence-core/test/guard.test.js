@@ -11,10 +11,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { guard, SqlRejected, MAX_ROWS, ALLOWED_TABLES } from '../src/guard.js';
 
-/** @param {string} sql @returns {SqlRejected} */
-function rejection(sql) {
+/** @param {string} sql @param {object} [options] @returns {SqlRejected} */
+function rejection(sql, options) {
     try {
-        guard(sql);
+        guard(sql, options);
     } catch (error) {
         if (error instanceof SqlRejected) return error;
         throw error;
@@ -116,6 +116,77 @@ test('rejects unparseable input rather than guessing', () => {
 test('rejects empty and non-string input', () => {
     assert.equal(rejection('').reason, 'empty');
     assert.equal(rejection('   ').reason, 'empty');
+});
+
+test('accepts a semicolon inside a string literal', () => {
+    // The raw ; scan used to reject this as a stacked statement. A ticker like
+    // BRK;A is a single statement and must pass; the AST count is the backstop.
+    const result = guard("SELECT id FROM customers WHERE name = 'BRK;A' LIMIT 1");
+    assert.deepEqual(result.tables, ['customers']);
+});
+
+test('still rejects a real stacked statement after the literal fix', () => {
+    assert.equal(
+        rejection("SELECT id FROM customers WHERE name = 'ok'; DROP TABLE customers").reason,
+        'multiple_statements',
+    );
+});
+
+test('accepts a semicolon inside a line comment', () => {
+    const result = guard('SELECT id FROM customers -- careful; not a second statement\nLIMIT 1');
+    assert.deepEqual(result.tables, ['customers']);
+});
+
+test('enforces a column allow-list when one is supplied', () => {
+    const options = { allowedColumns: { customers: ['id', 'country'] } };
+    // Allowed columns pass, and are reported back.
+    const ok = guard('SELECT id, country FROM customers LIMIT 5', options);
+    // Unqualified columns over a single table report no table prefix.
+    assert.deepEqual(ok.columns, ['country', 'id']);
+    // A column outside the list is refused, even the previously fine `name`.
+    assert.equal(rejection('SELECT id, name FROM customers', options).reason, 'column_not_allowed');
+});
+
+test('column allow-list refuses SELECT * because it names no columns to check', () => {
+    assert.equal(
+        rejection('SELECT * FROM customers', { allowedColumns: { customers: ['id'] } }).reason,
+        'wildcard_not_allowed',
+    );
+});
+
+test('column allow-list guards filter columns, not just projected ones', () => {
+    // country is referenced only in WHERE; the allow-list must still catch it.
+    assert.equal(
+        rejection("SELECT id FROM customers WHERE country = 'US'", {
+            allowedColumns: { customers: ['id'] },
+        }).reason,
+        'column_not_allowed',
+    );
+});
+
+test('scope injection binds a mandatory predicate as a parameter', () => {
+    const result = guard('SELECT id, country FROM customers', {
+        scope: { column: 'country', value: 'CA' },
+    });
+    // The value is bound, never inlined (sqlify does not escape quotes).
+    assert.deepEqual(result.params, ['CA']);
+    assert.match(result.sql, /"country" = \?/);
+    assert.doesNotMatch(result.sql, /'CA'/);
+});
+
+test('scope injection AND-s onto an existing WHERE', () => {
+    const result = guard("SELECT id FROM customers WHERE plan = 'growth'", {
+        scope: { column: 'country', value: 'CA' },
+    });
+    assert.match(result.sql, /AND/i);
+    assert.deepEqual(result.params, ['CA']);
+});
+
+test('scope rejects a column name that is not a plain identifier', () => {
+    assert.equal(
+        rejection('SELECT id FROM customers', { scope: { column: 'country; DROP', value: 1 } }).reason,
+        'bad_scope',
+    );
 });
 
 test('the allow-list is exactly the warehouse schema', () => {

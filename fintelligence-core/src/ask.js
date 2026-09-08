@@ -15,7 +15,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { openReadOnly } from './db.js';
+import { openReadOnly, runQuery, QueryTimeout } from './db.js';
 import { guard, SqlRejected } from './guard.js';
 import { plan } from './planner.js';
 import { narrate } from './narrator.js';
@@ -64,8 +64,21 @@ export async function ask(question, {
     const db = openReadOnly(dbPath);
     let rows;
     try {
-        rows = db.prepare(guarded.sql).all();
+        rows = runQuery(db, guarded.sql, { params: guarded.params });
     } catch (error) {
+        // A query that ran past its wall-clock budget is an availability
+        // outcome, distinct from a statement SQLite refused to run.
+        if (error instanceof QueryTimeout) {
+            return {
+                ok: false,
+                stage: 'execute',
+                reason: 'timeout',
+                message: error.message,
+                question,
+                proposedSql: guarded.sql,
+                interpretation: planned.interpretation,
+            };
+        }
         // Reaching here means the guard approved a statement SQLite would not
         // run — a syntax quirk, an unknown column, or (importantly) a write
         // the read-only connection refused. Worth surfacing distinctly.
@@ -81,10 +94,6 @@ export async function ask(question, {
     } finally {
         db.close();
     }
-
-    // node:sqlite returns null-prototype objects; normalise so downstream
-    // JSON serialisation and key enumeration behave predictably.
-    rows = rows.map((row) => ({ ...row }));
 
     const narration = skipNarration
         ? { text: '', grounded: true, attempts: 0, verification: null, fellBack: false }
