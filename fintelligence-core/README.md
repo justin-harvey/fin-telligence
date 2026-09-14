@@ -22,7 +22,7 @@ question
 ```bash
 npm install
 npm run seed                      # build the demo warehouse
-npm test                          # 117 tests, no credential required
+npm test                          # 120 tests, no credential required
 
 export ANTHROPIC_API_KEY=...      # or: ant auth login
 node bin/fintel.js ask "How has MRR trended over the period?"
@@ -198,10 +198,10 @@ hook, grounding verification (unit-aware, and able to check derived figures the
 query returns), a control-result shape and an offline-verifiable evidence packet
 (intent → SQL → CSV → hash + signature, `fintel enron … --export`), a SOC 2
 control catalog whose entries assert PASS/EXCEPTION and emit that packet
-(`fintel controls run …`; three reconciliation controls across the SaaS and
-Enron warehouses), an MCP server that exposes the controls, canonical queries and
-audit verification as tools and each warehouse's live schema as a resource
-(`fintel mcp`, stdio), the CLI, and 117 tests that run offline.
+(`fintel controls run …`; six controls across all three warehouses — reconciliation,
+reproducibility, and audit-chain integrity), an MCP server that exposes the
+controls, canonical queries and audit verification as tools and each warehouse's
+live schema as a resource (`fintel mcp`, stdio), the CLI, and 120 tests that run offline.
 
 **Synthetic:** the data. 416 customers over six months, generated
 deterministically from a fixed seed so that the same question always produces
@@ -269,7 +269,7 @@ src/mcp.js             MCP tools + resources (pure, transport-free)
 src/mcp-server.js      the stdio MCP transport (the only file that imports the SDK)
 src/ask.js             the pipeline
 bin/fintel.js          CLI
-test/                  117 tests, none requiring a credential
+test/                  120 tests, none requiring a credential
 ```
 
 Requires Node 22+ (`node:sqlite` is built in, so there is no native database

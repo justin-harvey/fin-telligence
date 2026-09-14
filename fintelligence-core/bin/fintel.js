@@ -425,12 +425,18 @@ async function main() {
                     for (const f of control.figures) {
                         console.log(`  ${f.label.padEnd(32)} ${f.value}${f.unit ? ' ' + f.unit : ''}`);
                     }
-                    console.log('\nProvenance');
-                    console.log('  result hash     :', entry.resultHash.slice(0, 32) + '…');
-                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
-                    console.log('  signature       :', entry.signature ? `signed (key ${entry.signingKeyId})` : 'unsigned');
+                    if (entry) {
+                        console.log('\nProvenance');
+                        console.log('  result hash     :', entry.resultHash.slice(0, 32) + '…');
+                        console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                        console.log('  signature       :', entry.signature ? `signed (key ${entry.signingKeyId})` : 'unsigned');
+                    }
                     const out = exportPath(rest);
-                    if (out) writePacket(out, { control, rows, entry, publicKey: signer?.publicKey ?? null });
+                    if (out && entry) {
+                        writePacket(out, { control, rows, entry, publicKey: signer?.publicKey ?? null });
+                    } else if (out) {
+                        console.log('\n  (this control verifies an existing chain; the chain itself is the evidence — no query packet)');
+                    }
                     if (control.status !== CONTROL_STATUS.PASS) process.exitCode = 1;
                     break;
                 }

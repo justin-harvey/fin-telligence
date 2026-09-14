@@ -118,8 +118,13 @@ export async function callTool(name, args = {}, { client } = {}) {
 
         case 'run_control': {
             const { id, ...options } = args;
-            const { control, entry } = getControl(id).run({ signer: loadSigner(), ...options });
-            return { control, provenance: provenanceOf(entry), exportable: true };
+            const { control, entry, verification } = getControl(id).run({ signer: loadSigner(), ...options });
+            return {
+                control,
+                provenance: entry ? provenanceOf(entry) : null,
+                verification: verification ?? null,
+                exportable: Boolean(entry),
+            };
         }
 
         case 'run_canonical': {

@@ -19,8 +19,10 @@
  */
 
 import { CONTROL_STATUS, controlResult } from './evidence.js';
+import { verify } from './audit.js';
 import { reconcileReportedDebt, reconcileReportedRevenue } from './enron.js';
 import { reconcileMrr } from './saas.js';
+import { netPositionAtClose, reconcileNetPosition, MARKETS_LOG_PATH } from './markets.js';
 
 /**
  * Shared shape for a reconciliation control: run a query that returns two
@@ -154,6 +156,76 @@ export function controlCatalog() {
                     unit: 'cents',
                     fmt: usd,
                 });
+            },
+        },
+        {
+            id: 'PI1.2-markets-position-reconciliation',
+            criterion: 'Processing Integrity (PI1.2) — derived positions reconcile to the recorded book',
+            warehouse: 'markets',
+            description: 'Net position derived from the execution ledger ties out to the end-of-day positions snapshot.',
+            run(options = {}) {
+                return reconciliation({
+                    controlId: 'PI1.2',
+                    criterion: this.criterion,
+                    description: this.description,
+                    run: reconcileNetPosition(options),
+                    leftKey: 'derived_net_qty',
+                    rightKey: 'snapshot_net_qty',
+                    leftLabel: 'Net position (derived from executions)',
+                    rightLabel: 'Net position (recorded snapshot)',
+                    unit: 'shares',
+                    fmt: (v) => `${Number(v).toLocaleString('en-US')} sh`,
+                });
+            },
+        },
+        {
+            id: 'CC7.3-figure-reproducibility',
+            criterion: 'Common Criteria (CC7.3) — a past figure reproduces exactly',
+            warehouse: 'markets',
+            description: 'Re-running an as-of query reproduces the identical result hash, so an auditor can recompute and compare.',
+            run(options = {}) {
+                const first = netPositionAtClose({ ticker: 'ACME', ...options });
+                const second = netPositionAtClose({ ticker: 'ACME', ...options });
+                const same = first.lineage.resultHash === second.lineage.resultHash;
+                const control = controlResult({
+                    controlId: 'CC7.3',
+                    criterion: this.criterion,
+                    description: this.description,
+                    status: same ? CONTROL_STATUS.PASS : CONTROL_STATUS.EXCEPTION,
+                    exception: same
+                        ? null
+                        : `two runs produced different result hashes (${first.lineage.resultHash.slice(0, 12)}… vs ${second.lineage.resultHash.slice(0, 12)}…)`,
+                    figures: [
+                        { label: 'Result hash (run 1)', value: first.lineage.resultHash, unit: 'sha256' },
+                        { label: 'Result hash (run 2)', value: second.lineage.resultHash, unit: 'sha256' },
+                    ],
+                });
+                return { control, entry: first.entry, rows: first.rows, lineage: first.lineage };
+            },
+        },
+        {
+            id: 'CC7.2-audit-chain-integrity',
+            criterion: 'Common Criteria (CC7.2) — the audit trail is tamper-evident and intact',
+            warehouse: 'audit',
+            description: 'The hash-chained audit log verifies end to end; any altered or dropped entry is detected.',
+            run(options = {}) {
+                const logPath = options.logPath ?? MARKETS_LOG_PATH;
+                const integrity = verify(logPath);
+                const control = controlResult({
+                    controlId: 'CC7.2',
+                    criterion: this.criterion,
+                    description: this.description,
+                    status: integrity.ok ? CONTROL_STATUS.PASS : CONTROL_STATUS.EXCEPTION,
+                    exception: integrity.ok ? null : `chain broke at entry ${integrity.brokenAt}: ${integrity.reason}`,
+                    figures: [
+                        { label: 'Entries in chain', value: integrity.entries, unit: 'count' },
+                        { label: 'Chain state', value: integrity.ok ? 'INTACT' : 'BROKEN' },
+                    ],
+                });
+                // A verification control checks an existing chain rather than
+                // producing a new attested query, so there is no query entry to
+                // package; the chain it verified is itself the evidence.
+                return { control, entry: null, rows: [], verification: integrity };
             },
         },
     ];

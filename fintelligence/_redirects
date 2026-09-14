@@ -1,2 +1,3 @@
 # Clean URL for the Enron reporting-gap page
 /enron    /enron.html    200
+/controls  /controls.html  200

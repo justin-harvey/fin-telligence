@@ -321,3 +321,49 @@ export function surveillanceRapidCancels({
     });
     return { rows, lineage, entry };
 }
+
+/**
+ * Reconciliation query — the net position in a ticker derived from the execution
+ * ledger versus the independently stored end-of-day positions snapshot, in one
+ * attested statement. A processing-integrity control passes only when the two
+ * tie out; a divergence means the derived book and the recorded book disagree.
+ *
+ * @param {object} [params]
+ * @param {string} [params.ticker]
+ * @param {string} [params.tradingDate]
+ * @param {string} [params.dbPath]
+ * @param {string} [params.logPath]
+ * @param {object|null} [params.signer]
+ * @param {{ query: Function }} [params.warehouse]
+ * @returns {{ rows: object[], lineage: object, entry: object }}
+ */
+export function reconcileNetPosition({
+    ticker = 'ACME',
+    tradingDate = TRADING_DATE,
+    dbPath = MARKETS_DB_PATH,
+    logPath = MARKETS_LOG_PATH,
+    signer = null,
+    warehouse = new SqliteWarehouse(dbPath),
+} = {}) {
+    const t = String(ticker).toUpperCase();
+    const sql =
+        'SELECT ' +
+        `(SELECT ${MARKETS_REGISTRY.resolve('net_position').sql} FROM executions WHERE ticker = ?) AS derived_net_qty, ` +
+        '(SELECT SUM(net_qty) FROM positions WHERE ticker = ? AND date = ?) AS snapshot_net_qty';
+    const guarded = guard(sql, guardOptions);
+    const rows = warehouse.query(guarded.sql, { params: [t, t, tradingDate] });
+
+    const lineage = buildLineage({
+        question: `Net position in ${t} at ${tradingDate}: derived from executions reconciled to the positions snapshot`,
+        sql: guarded.sql,
+        tables: guarded.tables,
+        rows,
+        limitInjected: guarded.limitInjected,
+    });
+    const entry = append({ ...lineage, scenario: 'position_reconciliation', ticker: t }, {
+        path: logPath,
+        complianceTags: ['reconciliation', 'MiFID II: position', 'reproducible'],
+        signer,
+    });
+    return { rows, lineage, entry };
+}

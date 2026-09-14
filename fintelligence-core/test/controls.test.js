@@ -7,12 +7,14 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { seedEnron } from '../src/enron.js';
+import { seedMarkets } from '../src/markets.js';
 import { seed as seedSaas } from '../src/db.js';
+import { readLog } from '../src/audit.js';
 import { controlCatalog, getControl } from '../src/controls.js';
 import { generateCompliancePacket, verifyPacket, CONTROL_STATUS } from '../src/evidence.js';
 
@@ -26,7 +28,7 @@ function freshLog() {
 const CONTROL_ID = 'PI1.2-enron-debt-reconciliation';
 
 test('the catalog resolves controls by id and rejects unknown ones', () => {
-    assert.ok(controlCatalog().length >= 3);
+    assert.ok(controlCatalog().length >= 6, 'the full PI/CC7 button set should be present');
     assert.equal(getControl(CONTROL_ID).id, CONTROL_ID);
     assert.throws(() => getControl('no-such-control'));
 });
@@ -110,4 +112,40 @@ test('the SaaS MRR reconciliation PASSES on clean data and flags an altered subs
     const tampered = control.run({ dbPath: db, logPath: freshLog() });
     assert.equal(tampered.control.status, CONTROL_STATUS.EXCEPTION);
     assert.match(tampered.control.exception, /does not tie to/);
+});
+
+test('the markets position reconciliation PASSES: derived ties to the recorded snapshot', () => {
+    const db = freshDb('pos');
+    seedMarkets(db);
+    const { control, rows } = getControl('PI1.2-markets-position-reconciliation').run({ dbPath: db, logPath: freshLog() });
+    assert.equal(control.status, CONTROL_STATUS.PASS);
+    assert.equal(rows[0].derived_net_qty, rows[0].snapshot_net_qty);
+});
+
+test('the reproducibility control PASSES: two runs share a result hash', () => {
+    const db = freshDb('repro');
+    seedMarkets(db);
+    const { control } = getControl('CC7.3-figure-reproducibility').run({ dbPath: db, logPath: freshLog() });
+    assert.equal(control.status, CONTROL_STATUS.PASS);
+    assert.equal(control.figures[0].value, control.figures[1].value);
+});
+
+test('the audit-chain integrity control PASSES on a good chain and FLAGS a tampered one', () => {
+    const db = freshDb('int');
+    seedEnron(db);
+    const logPath = freshLog();
+    // Build a chain by running a control into this log.
+    getControl('PI1.2-enron-debt-reconciliation').run({ dbPath: db, logPath });
+
+    const intact = getControl('CC7.2-audit-chain-integrity').run({ logPath });
+    assert.equal(intact.control.status, CONTROL_STATUS.PASS);
+    assert.equal(intact.entry, null, 'a verification control produces no query entry');
+
+    // Alter a recorded entry; the chain must no longer verify.
+    const entries = readLog(logPath);
+    entries[0].question = 'a different question';
+    writeFileSync(logPath, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
+    const broken = getControl('CC7.2-audit-chain-integrity').run({ logPath });
+    assert.equal(broken.control.status, CONTROL_STATUS.EXCEPTION);
 });
