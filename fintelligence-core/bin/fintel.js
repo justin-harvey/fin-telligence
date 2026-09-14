@@ -444,6 +444,23 @@ async function main() {
             break;
         }
 
+        case 'mcp': {
+            try {
+                const { startMcpServer } = await import('../src/mcp-server.js');
+                await startMcpServer();
+                console.error('fintel MCP server running on stdio (tools + schema resources).');
+                // The stdio transport keeps the process alive to serve requests.
+            } catch (error) {
+                if (error.code === 'ERR_MODULE_NOT_FOUND') {
+                    console.error('The MCP server needs @modelcontextprotocol/sdk — run `npm install` first.');
+                    process.exitCode = 1;
+                    return;
+                }
+                throw error;
+            }
+            break;
+        }
+
         default:
             console.log('Usage:');
             console.log('  fintel seed                      build the SaaS demo warehouse');
@@ -454,6 +471,7 @@ async function main() {
             console.log('  fintel markets <sub>             capital-markets surveillance demo');
             console.log('  fintel enron <sub>               synthetic Enron reporting-gap demo');
             console.log('  fintel controls <sub>            run SOC 2 controls (PASS/EXCEPTION + evidence)');
+            console.log('  fintel mcp                       serve the engine over MCP (stdio)');
             process.exitCode = command ? 2 : 0;
     }
 }
