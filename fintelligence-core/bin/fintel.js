@@ -37,6 +37,7 @@ import {
     verifyPacket,
     renderPacketMarkdown,
 } from '../src/evidence.js';
+import { controlCatalog, getControl } from '../src/controls.js';
 
 const [, , command, ...rest] = process.argv;
 
@@ -389,6 +390,60 @@ async function main() {
             break;
         }
 
+        case 'controls': {
+            const sub = rest[0];
+            const signer = loadSigner();
+            switch (sub) {
+                case 'list': {
+                    console.log('\nSOC 2 control catalog\n');
+                    for (const c of controlCatalog()) {
+                        console.log(`  ${c.id}`);
+                        console.log(`    ${c.criterion}`);
+                        console.log(`    warehouse: ${c.warehouse} — ${c.description}\n`);
+                    }
+                    break;
+                }
+                case 'run': {
+                    const id = rest[1];
+                    if (!id) {
+                        console.error('Usage: fintel controls run <control-id> [--export <file>]');
+                        process.exitCode = 2;
+                        return;
+                    }
+                    let control;
+                    let entry;
+                    let rows;
+                    try {
+                        ({ control, entry, rows } = getControl(id).run({ signer }));
+                    } catch (error) {
+                        console.error(error.message);
+                        process.exitCode = 2;
+                        return;
+                    }
+                    console.log(`\n${control.controlId} — ${control.criterion}`);
+                    console.log(`  status: ${control.status}${control.exception ? `  (${control.exception})` : ''}\n`);
+                    for (const f of control.figures) {
+                        console.log(`  ${f.label.padEnd(32)} ${f.value}${f.unit ? ' ' + f.unit : ''}`);
+                    }
+                    console.log('\nProvenance');
+                    console.log('  result hash     :', entry.resultHash.slice(0, 32) + '…');
+                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                    console.log('  signature       :', entry.signature ? `signed (key ${entry.signingKeyId})` : 'unsigned');
+                    const out = exportPath(rest);
+                    if (out) writePacket(out, { control, rows, entry, publicKey: signer?.publicKey ?? null });
+                    if (control.status !== CONTROL_STATUS.PASS) process.exitCode = 1;
+                    break;
+                }
+                default:
+                    console.log('Usage:');
+                    console.log('  fintel controls list             list the SOC 2 control catalog');
+                    console.log('  fintel controls run <id>         run a control, print PASS/EXCEPTION');
+                    console.log('    add --export <file.json|.md>   also write a verifiable evidence packet');
+                    process.exitCode = sub ? 2 : 0;
+            }
+            break;
+        }
+
         default:
             console.log('Usage:');
             console.log('  fintel seed                      build the SaaS demo warehouse');
@@ -398,6 +453,7 @@ async function main() {
             console.log('  fintel audit --export out.json   write the audit package');
             console.log('  fintel markets <sub>             capital-markets surveillance demo');
             console.log('  fintel enron <sub>               synthetic Enron reporting-gap demo');
+            console.log('  fintel controls <sub>            run SOC 2 controls (PASS/EXCEPTION + evidence)');
             process.exitCode = command ? 2 : 0;
     }
 }

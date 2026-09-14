@@ -281,3 +281,50 @@ export function debtWithHiddenLeverage({
     });
     return { rows, lineage, entry };
 }
+
+/**
+ * Reconciliation query — the reported debt computed from the ledger versus the
+ * figure as filed in the 10-K, both in one attested statement. Two scalar
+ * subqueries (one per table) rather than a UNION, because the guard's column
+ * allow-list resolves scalar-subquery columns but rejects a union's synthesised
+ * ones. A processing-integrity control compares the two and passes only when
+ * they tie out; a variance is an exception a query alone would never surface.
+ *
+ * @param {object} [params]
+ * @param {number} [params.fiscalYear]
+ * @param {string} [params.dbPath]
+ * @param {string} [params.logPath]
+ * @param {object|null} [params.signer]
+ * @param {{ query: Function }} [params.warehouse]
+ * @returns {{ rows: object[], lineage: object, entry: object }}
+ */
+export function reconcileReportedDebt({
+    fiscalYear = FISCAL_YEAR,
+    dbPath = ENRON_DB_PATH,
+    logPath = ENRON_LOG_PATH,
+    signer = null,
+    warehouse = new SqliteWarehouse(dbPath),
+} = {}) {
+    const sql =
+        'SELECT ' +
+        `(SELECT ${ENRON_REGISTRY.resolve('debt_reported_usd_millions').sql} FROM debt_instruments ` +
+        'WHERE fiscal_year = ?) AS ledger_reported_usd_millions, ' +
+        "(SELECT SUM(amount_usd_millions) FROM reported_financials " +
+        "WHERE fiscal_year = ? AND line_item IN ('Short-term debt', 'Long-term debt')) AS filed_reported_usd_millions";
+    const guarded = guard(sql, guardOptions);
+    const rows = warehouse.query(guarded.sql, { params: [fiscalYear, fiscalYear] });
+
+    const lineage = buildLineage({
+        question: `FY${fiscalYear} reported debt: ledger-computed reconciled to the figure as filed in the 10-K`,
+        sql: guarded.sql,
+        tables: guarded.tables,
+        rows,
+        limitInjected: guarded.limitInjected,
+    });
+    const entry = append({ ...lineage, scenario: 'debt_reconciliation', fiscalYear }, {
+        path: logPath,
+        complianceTags: ['reconciliation', 'processing-integrity', 'reproducible'],
+        signer,
+    });
+    return { rows, lineage, entry };
+}

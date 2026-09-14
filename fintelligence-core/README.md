@@ -192,8 +192,9 @@ metric registry the scenarios resolve against, lineage capture and hashing, the
 hash-chained audit log with Ed25519 signing and a pluggable external-anchoring
 hook, grounding verification (unit-aware, and able to check derived figures the
 query returns), a control-result shape and an offline-verifiable evidence packet
-(intent → SQL → CSV → hash + signature, `fintel enron … --export`), the CLI, and
-103 tests that run offline.
+(intent → SQL → CSV → hash + signature, `fintel enron … --export`), a SOC 2
+control catalog whose entries assert PASS/EXCEPTION and emit that packet
+(`fintel controls run …`), the CLI, and 107 tests that run offline.
 
 **Synthetic:** the data. 416 customers over six months, generated
 deterministically from a fixed seed so that the same question always produces
@@ -254,9 +255,10 @@ src/auth.js            authentication + per-principal row-level security
 src/markets.js         capital-markets warehouse, metric layer, surveillance scenarios
 src/enron.js           Enron POC warehouse, reporting-gap scenarios (real anchors, synthetic rows)
 src/evidence.js        control-result shape + verifiable evidence packet (intent→SQL→CSV→hash+sig)
+src/controls.js        the SOC 2 control catalog (queries that assert PASS/EXCEPTION)
 src/ask.js             the pipeline
 bin/fintel.js          CLI
-test/                  103 tests, none requiring a credential
+test/                  107 tests, none requiring a credential
 ```
 
 Requires Node 22+ (`node:sqlite` is built in, so there is no native database
