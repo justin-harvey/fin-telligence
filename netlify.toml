@@ -1,4 +1,7 @@
 # This repo ships a pre-built static site — there is no package.json and nothing
-# to compile. Publish the site folder as-is; do not run a build step.
+# to compile. The explicit no-op `command` OVERRIDES a build command set in the
+# Netlify UI (which otherwise runs `npm run build` and fails on the missing
+# package.json); netlify.toml's command takes precedence over the UI setting.
 [build]
+  command = "echo 'No build step — pre-built static site.'"
   publish = "fintelligence"
