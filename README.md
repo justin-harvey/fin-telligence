@@ -3,7 +3,7 @@
 **Financial answers you can audit. The model writes SQL, the database produces the numbers, and every figure in the answer is verified against the data before you see it.**
 
 [![Prototype](https://img.shields.io/badge/prototype-live-brightgreen.svg)](https://fin-telligence.netlify.app/)
-[![Core tests](https://img.shields.io/badge/core-88%20tests%2C%20offline-blue.svg)](fintelligence-core/)
+[![Core tests](https://img.shields.io/badge/core-96%20tests%2C%20offline-blue.svg)](fintelligence-core/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 The premise is simple: a language model is excellent at turning a question into SQL, and terrible at being trusted with the arithmetic. So it is never trusted with the arithmetic. The model writes a query, a read-only database returns the rows, and a verifier checks that every number in the prose actually came from those rows. What you get back is either a grounded answer with a full provenance trail, or an explicit refusal. Never an unverified paragraph presented as fact.
@@ -27,12 +27,13 @@ question
 
 The prototype makes the case. The core makes it executable. Start with the [`fintelligence-core/` README](fintelligence-core/README.md) for the full technical account.
 
-## Two warehouses
+## Three warehouses
 
-The same pipeline runs against two synthetic warehouses — the guard, grounding, lineage and audit chain are identical; only the schema and allow-list change.
+The same pipeline runs against three synthetic warehouses — the guard, grounding, lineage and audit chain are identical; only the schema and allow-list change.
 
 - **SaaS finance** — MRR, retention, LTV:CAC and cohort questions. The demo that shows the engine works.
 - **Capital markets** — the flagship: trade-surveillance attestation. Net position at market close (computed in SQL, pinned to an as-of timestamp, reproducible hash) and market-abuse surveillance (accounts that place and cancel within milliseconds — the shape spoofing and layering leave), framed against MAR / MiFID II. Alerts are appended to the signed, hash-chained log, so a surveillance finding cannot be quietly walked back; altering a past alert breaks verification. See the [core README](fintelligence-core/README.md#trade-surveillance-attestation).
+- **Enron reporting-gap POC** — the case study. Enron's FY2000 10-K numbers set against what the underlying rows support: revenue booked *gross* ($100,789m reported) versus the *net* merchant margin actually earned ($1,953m), and reported debt ($10,229m) versus the true total once the off-balance-sheet SPEs are included. The aggregates reconcile to Enron's **real** reported figures (cited to SEC accession `0001024401-01-500010`); the transaction-level rows are synthetic and labelled so. Each comparison is grounded, hash-chained, and tamper-tested. See the [core README](fintelligence-core/README.md#the-enron-reporting-gap-demo).
 
 ## The four guarantees, and what enforces each
 
@@ -61,6 +62,11 @@ node bin/fintel.js audit
 node bin/fintel.js markets seed
 node bin/fintel.js markets net-position ACME    # net position at close, pinned as-of and hashed
 node bin/fintel.js markets surveillance         # flag rapid place-and-cancel accounts
+
+# Enron reporting-gap demo (no credential needed — real 10-K anchors, synthetic rows)
+node bin/fintel.js enron seed
+node bin/fintel.js enron revenue                # revenue as reported (gross) vs merchant margin (net)
+node bin/fintel.js enron debt                   # reported debt vs true debt incl. off-balance-sheet SPEs
 ```
 
 The guard, the warehouse, the lineage record, and the audit chain all run with no credential. Only the plan and narrate steps call the model.
@@ -70,7 +76,7 @@ The guard, the warehouse, the lineage record, and the audit chain all run with n
 In keeping with the project's own discipline about claims:
 
 - **Real:** the guard (table and column allow-lists, a query budget, a row-level scope hook driven by an authenticated principal), read-only enforcement behind a warehouse-connector interface, two SQLite warehouses, unit-aware grounding, lineage capture and hashing, the hash-chained audit chain with Ed25519 signing and a pluggable external-anchoring hook, a first-class metric registry, the CLI, and the offline test suite.
-- **Synthetic:** the data in both warehouses, generated deterministically from a fixed seed so the same question always produces the same result hash. The numbers are invented, internally consistent, and describe no real company or market. For a tool about traceable figures, fabricated data clearly labelled as fabricated is fine; fabricated data presented as real is the exact failure this project exists to prevent.
+- **Synthetic:** the transaction-level data in all three warehouses, generated deterministically so the same question always produces the same result hash. The SaaS and markets numbers are invented and describe no real company; the Enron warehouse's *aggregates* reconcile to real reported 10-K figures (cited), but its transaction rows and off-balance-sheet SPE amounts are synthetic and labelled so. For a tool about traceable figures, fabricated data clearly labelled as fabricated is fine; fabricated data presented as real is the exact failure this project exists to prevent.
 - **Not a compliance claim:** the audit entries carry `SOX` and `GDPR: no PII` tags because the query path is read-only over a schema with no personal data. That is a true statement about this configuration, not a certification. SOC 2, SOX, and GDPR are properties of organizations and processes, not of software. What this produces is evidence: a query, its provenance, a reproducible hash of its result, and a chain showing the record has not been edited since.
 
 ## Requirements

@@ -23,6 +23,13 @@ import {
     MARKETS_LOG_PATH,
     TRADING_DATE,
 } from '../src/markets.js';
+import {
+    seedEnron,
+    revenueByBasis,
+    debtWithHiddenLeverage,
+    ENRON_LOG_PATH,
+    FISCAL_YEAR,
+} from '../src/enron.js';
 
 const [, , command, ...rest] = process.argv;
 
@@ -238,6 +245,84 @@ async function main() {
             break;
         }
 
+        case 'enron': {
+            const sub = rest[0];
+            const signer = loadSigner();
+            switch (sub) {
+                case 'seed': {
+                    const result = seedEnron();
+                    console.log(
+                        `Seeded Enron POC warehouse: ${result.entities} entities, ` +
+                            `${result.revenueTransactions} revenue deals, ${result.debtInstruments} debt instruments, ` +
+                            `${result.reportedLineItems} reported line items.`,
+                    );
+                    console.log('Aggregates reconcile to Enron\'s real FY2000 10-K; transaction rows are synthetic.');
+                    break;
+                }
+                case 'revenue': {
+                    const { rows, lineage, entry } = revenueByBasis({ signer });
+                    const r = rows[0] ?? {};
+                    console.log(`\nFY${FISCAL_YEAR} revenue — as reported (gross) versus merchant margin (net)\n`);
+                    printRows(rows);
+                    console.log(
+                        `\n  Reported gross revenue : $${Number(r.revenue_gross_usd_millions).toLocaleString('en-US')}m` +
+                            `   (10-K total revenues)`,
+                    );
+                    console.log(
+                        `  Net merchant margin    : $${Number(r.revenue_net_usd_millions).toLocaleString('en-US')}m`,
+                    );
+                    console.log('\nProvenance');
+                    console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
+                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                    console.log('  signature       :', entry.signature ? `signed (key ${entry.signingKeyId})` : 'unsigned');
+                    break;
+                }
+                case 'debt': {
+                    const { rows, lineage, entry } = debtWithHiddenLeverage({ signer });
+                    const r = rows[0] ?? {};
+                    console.log(`\nFY${FISCAL_YEAR} debt — reported versus true, including off-balance-sheet SPEs\n`);
+                    printRows(rows);
+                    console.log(
+                        `\n  Reported debt          : $${Number(r.reported_debt_usd_millions).toLocaleString('en-US')}m` +
+                            `   (10-K short + long-term)`,
+                    );
+                    console.log(
+                        `  True debt incl. SPEs   : $${Number(r.total_debt_incl_spe_usd_millions).toLocaleString('en-US')}m` +
+                            `   (synthetic SPE amounts)`,
+                    );
+                    console.log('\nProvenance');
+                    console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
+                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                    console.log('  compliance tags :', entry.complianceTags.join(' · '));
+                    break;
+                }
+                case 'audit': {
+                    const verifier = signer ? { publicKey: signer.publicKey } : null;
+                    const integrity = verify(ENRON_LOG_PATH, { verifier });
+                    console.log(
+                        `Enron audit chain: ${integrity.entries} entries — ${integrity.ok ? 'INTACT' : 'BROKEN'}` +
+                            `${verifier ? ' (signatures checked)' : ''}`,
+                    );
+                    if (!integrity.ok) {
+                        console.log(`  broken at entry ${integrity.brokenAt}: ${integrity.reason}`);
+                        process.exitCode = 1;
+                    }
+                    for (const item of readLog(ENRON_LOG_PATH)) {
+                        console.log(`  #${String(item.seq).padStart(3)}  ${item.scenario ?? 'query'}  ${item.question}`);
+                    }
+                    break;
+                }
+                default:
+                    console.log('Usage:');
+                    console.log('  fintel enron seed          build the synthetic Enron POC warehouse');
+                    console.log('  fintel enron revenue       reported (gross) vs merchant (net) revenue, attested');
+                    console.log('  fintel enron debt          reported vs true debt incl. off-balance-sheet SPEs');
+                    console.log('  fintel enron audit         verify the Enron audit chain');
+                    process.exitCode = sub ? 2 : 0;
+            }
+            break;
+        }
+
         default:
             console.log('Usage:');
             console.log('  fintel seed                      build the SaaS demo warehouse');
@@ -246,6 +331,7 @@ async function main() {
             console.log('  fintel audit                     verify the hash chain, list entries');
             console.log('  fintel audit --export out.json   write the audit package');
             console.log('  fintel markets <sub>             capital-markets surveillance demo');
+            console.log('  fintel enron <sub>               synthetic Enron reporting-gap demo');
             process.exitCode = command ? 2 : 0;
     }
 }

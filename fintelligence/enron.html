@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fin-Telligence — The Enron Reporting Gap</title>
+    <meta name="description" content="Enron's reported FY2000 figures set against what the underlying rows support — every number grounded, hashed, and tamper-evident." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg: #0f1626;
+        --panel: #1c2537;
+        --panel-2: #161e2e;
+        --line: #2d3748;
+        --text: #e5e9f0;
+        --muted: #9ca3af;
+        --accent: #6366f1;
+        --blue: #3b82f6;
+        --green: #34d399;
+        --amber: #fbbf24;
+        --red: #f87171;
+      }
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        background: radial-gradient(1200px 600px at 70% -10%, #1a2340 0, transparent 60%), var(--bg);
+        background-color: var(--bg);
+        color: var(--text);
+        font-family: Inter, sans-serif;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+      a { color: var(--blue); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .wrap { max-width: 940px; margin: 0 auto; padding: 0 24px; }
+      code, .mono { font-family: "JetBrains Mono", "Fira Code", monospace; }
+
+      header.site {
+        border-bottom: 1px solid var(--line);
+        padding: 18px 0;
+        position: sticky; top: 0;
+        background: rgba(15,22,38,0.85);
+        backdrop-filter: blur(8px);
+        z-index: 10;
+      }
+      header.site .wrap { display: flex; align-items: center; justify-content: space-between; }
+      .brand { font-weight: 700; letter-spacing: -0.02em; }
+      .brand span { color: var(--accent); }
+      .back { color: var(--muted); font-size: 14px; }
+
+      .hero { padding: 72px 0 40px; }
+      .kicker {
+        font-family: "JetBrains Mono", monospace; font-size: 12px; letter-spacing: 0.14em;
+        text-transform: uppercase; color: var(--accent); margin: 0 0 16px;
+      }
+      h1 { font-size: 42px; line-height: 1.12; letter-spacing: -0.03em; margin: 0 0 20px; }
+      h1 .thin { color: var(--muted); font-weight: 500; }
+      .lede { font-size: 19px; color: #c7cede; max-width: 720px; }
+
+      .section { padding: 28px 0; }
+      h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin: 0 0 20px; font-weight: 600; }
+
+      .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+      @media (max-width: 760px) { .cards { grid-template-columns: 1fr; } h1 { font-size: 32px; } }
+      .card {
+        background: linear-gradient(180deg, var(--panel) 0, var(--panel-2) 100%);
+        border: 1px solid var(--line); border-radius: 14px; padding: 24px;
+      }
+      .card h3 { margin: 0 0 4px; font-size: 18px; letter-spacing: -0.01em; }
+      .card .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+
+      .figrow { display: flex; align-items: baseline; justify-content: space-between; padding: 12px 0; border-top: 1px dashed var(--line); }
+      .figrow:first-of-type { border-top: none; }
+      .figrow .label { font-size: 13px; color: var(--muted); }
+      .figrow .val { font-family: "JetBrains Mono", monospace; font-size: 26px; font-weight: 500; }
+      .val.reported { color: var(--text); }
+      .val.gross { color: var(--amber); }
+      .val.true { color: var(--red); }
+      .val.net { color: var(--green); }
+      .gap {
+        margin-top: 16px; padding: 12px 14px; border-radius: 10px;
+        background: rgba(99,102,241,0.09); border: 1px solid rgba(99,102,241,0.25);
+        font-size: 13px; color: #c7cede;
+      }
+      .gap b { color: var(--text); }
+      .tag { display: inline-block; font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.06em;
+        text-transform: uppercase; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+      .tag.real { color: var(--green); border-color: rgba(52,211,153,0.4); }
+      .tag.synth { color: var(--amber); border-color: rgba(251,191,36,0.4); }
+
+      .prov {
+        background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px;
+        font-family: "JetBrains Mono", monospace; font-size: 13px; color: #c7cede;
+      }
+      .prov .k { color: var(--muted); }
+      .prov .row { padding: 5px 0; overflow-wrap: anywhere; }
+      .pill { color: var(--green); }
+
+      .pipe {
+        display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+        font-family: "JetBrains Mono", monospace; font-size: 13px; color: var(--muted); margin-top: 6px;
+      }
+      .pipe .step { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
+      .pipe .arw { color: var(--accent); }
+
+      .disc {
+        border-left: 3px solid var(--accent); background: rgba(99,102,241,0.06);
+        padding: 16px 20px; border-radius: 0 10px 10px 0; font-size: 14px; color: #c7cede;
+      }
+      .disc b { color: var(--text); }
+
+      pre.cli {
+        background: #0b111d; border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px;
+        overflow-x: auto; font-family: "JetBrains Mono", monospace; font-size: 13px; color: #c7cede;
+      }
+      pre.cli .c { color: var(--muted); }
+      pre.cli .p { color: var(--accent); }
+
+      footer.site { border-top: 1px solid var(--line); margin-top: 48px; padding: 28px 0 56px; color: var(--muted); font-size: 13px; }
+      .src { font-size: 12px; color: var(--muted); margin-top: 10px; }
+      .src code { color: #c7cede; }
+    </style>
+  </head>
+  <body>
+    <header class="site">
+      <div class="wrap">
+        <div class="brand">Fin<span>·</span>Telligence</div>
+        <a class="back" href="/">&larr; Back to overview</a>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="hero">
+        <p class="kicker">Case study · reporting-gap attestation</p>
+        <h1>The Enron reporting gap<br /><span class="thin">what was reported, versus what the rows support.</span></h1>
+        <p class="lede">
+          Enron's FY2000 annual report is the case the whole thesis is haunted by: numbers that
+          were internally consistent on paper and disconnected from reality. Fin-Telligence runs
+          the same verified pipeline over it, computing the <em>reported</em> figure and the
+          <em>underlying</em> figure in one guarded query &mdash; so the distance between them is a
+          grounded, hash-chained, tamper-evident result, not an assertion.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>Two mechanics of the gap</h2>
+        <div class="cards">
+          <div class="card">
+            <h3>Revenue: gross vs. net</h3>
+            <p class="sub">Trades booked at full notional turned $40bn into $100bn.</p>
+            <div class="figrow">
+              <span class="label">Reported revenue (gross) <span class="tag real">real 10-K</span></span>
+              <span class="val gross">$100,789m</span>
+            </div>
+            <div class="figrow">
+              <span class="label">Merchant margin actually earned (net) <span class="tag synth">modelled</span></span>
+              <span class="val net">$1,953m</span>
+            </div>
+            <div class="gap">
+              Revenue was booked on a <b>gross</b> basis &mdash; the full notional of each energy
+              trade counted as revenue. The net merchant margin is <b>~1.9%</b> of the headline.
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Debt: reported vs. true</h3>
+            <p class="sub">Billions parked off the balance sheet in special-purpose entities.</p>
+            <div class="figrow">
+              <span class="label">Reported debt (on balance sheet) <span class="tag real">real 10-K</span></span>
+              <span class="val reported">$10,229m</span>
+            </div>
+            <div class="figrow">
+              <span class="label">True debt incl. off-balance-sheet SPEs <span class="tag synth">illustrative</span></span>
+              <span class="val true">$21,729m</span>
+            </div>
+            <div class="gap">
+              Debt held in the SPEs (<b>JEDI, Chewco, LJM1/2, Raptor, Whitewing</b>) never touched
+              the reported balance sheet. Consolidating them more than <b>doubles</b> the leverage.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Every figure carries its provenance</h2>
+        <div class="pipe">
+          <span class="step">question</span><span class="arw">&rarr;</span>
+          <span class="step">guard</span><span class="arw">&rarr;</span>
+          <span class="step">read-only SQL</span><span class="arw">&rarr;</span>
+          <span class="step">grounding</span><span class="arw">&rarr;</span>
+          <span class="step">lineage + hash</span><span class="arw">&rarr;</span>
+          <span class="step">signed audit chain</span>
+        </div>
+        <div class="prov" style="margin-top:18px">
+          <div class="row"><span class="k">scenario     </span> debt_reported_vs_true &nbsp; FY2000</div>
+          <div class="row"><span class="k">result hash  </span> b69b15dc732765b05462230971ec51cc…</div>
+          <div class="row"><span class="k">audit entry  </span> #1 &nbsp; 667df404bc8d3235… &nbsp; <span class="pill">chain INTACT</span></div>
+          <div class="row"><span class="k">compliance   </span> off-balance-sheet · leverage · reproducible</div>
+        </div>
+        <p class="src">
+          The figures compute <em>in SQL</em> and pin to a deterministic seed, so re-running
+          reproduces the same result hash exactly &mdash; an auditor can recompute and compare.
+          Edit a recorded attestation after the fact and <code>verify()</code> reports the precise
+          entry that changed.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>Run it yourself</h2>
+        <pre class="cli"><span class="c"># no credential needed — canonical queries over real 10-K anchors</span>
+node bin/fintel.js <span class="p">enron seed</span>
+node bin/fintel.js <span class="p">enron revenue</span>    <span class="c"># gross vs net revenue, attested</span>
+node bin/fintel.js <span class="p">enron debt</span>       <span class="c"># reported vs true debt incl. SPEs</span>
+node bin/fintel.js <span class="p">enron audit</span>      <span class="c"># verify the hash chain</span></pre>
+      </section>
+
+      <section class="section">
+        <h2>What is real, and what is synthetic</h2>
+        <div class="disc">
+          <b>The aggregates are real.</b> Total revenues, net income, and reported debt reconcile
+          to Enron's actual reported figures, transcribed verbatim from the filing and stored with
+          the citation on every row. <b>The transaction-level rows are synthetic</b> &mdash; there is
+          no public Enron general ledger &mdash; and the off-balance-sheet SPE amounts are
+          illustrative of the mechanism, not a claimed exact historical total. For a tool about
+          traceable figures, fabricated data labelled as fabricated is fine; fabricated data
+          presented as real is the exact failure this project exists to prevent. Nothing here is a
+          compliance claim.
+          <div class="src">
+            Source: ENRON CORP 10-K, fiscal year ended Dec 31 2000, filed 2001-04-02 &mdash;
+            SEC EDGAR accession <code>0001024401-01-500010</code> (public domain).
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site">
+      <div class="wrap">
+        Fin-Telligence &mdash; financial answers you can audit. The model writes SQL, the database
+        produces the numbers, and every figure is verified before you see it.
+      </div>
+    </footer>
+  </body>
+</html>

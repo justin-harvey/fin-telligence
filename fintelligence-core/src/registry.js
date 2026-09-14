@@ -110,3 +110,35 @@ export function marketsRegistry() {
             unit: 'cents',
         });
 }
+
+/**
+ * The registry for the synthetic Enron POC warehouse. The definitions encode the
+ * two mechanics of the reporting gap — revenue booked gross versus net margin
+ * earned, and reported debt versus true debt including off-balance-sheet SPEs —
+ * so each is computed one blessed way. All amounts are USD millions.
+ *
+ * @returns {MetricRegistry}
+ */
+export function enronRegistry() {
+    return new MetricRegistry()
+        .define('revenue_gross_usd_millions', {
+            description: 'Revenue as booked: full trade notional summed, in USD millions.',
+            sql: 'SUM(gross_notional_usd_millions)',
+            unit: 'usd_millions',
+        })
+        .define('revenue_net_usd_millions', {
+            description: 'Merchant revenue actually earned: net margin summed, in USD millions.',
+            sql: 'SUM(net_margin_usd_millions)',
+            unit: 'usd_millions',
+        })
+        .define('debt_reported_usd_millions', {
+            description: 'Debt on the reported balance sheet only, in USD millions.',
+            sql: 'SUM(CASE WHEN on_balance_sheet = 1 THEN principal_usd_millions ELSE 0 END)',
+            unit: 'usd_millions',
+        })
+        .define('debt_total_usd_millions', {
+            description: 'All debt including off-balance-sheet SPEs, in USD millions.',
+            sql: 'SUM(principal_usd_millions)',
+            unit: 'usd_millions',
+        });
+}

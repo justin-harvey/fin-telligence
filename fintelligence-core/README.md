@@ -144,16 +144,54 @@ cannot be quietly walked back after the fact. The data is synthetic and
 deterministic; two of the six accounts are seeded to exhibit the place-and-cancel
 pattern, and the surveillance query flags exactly those two.
 
+## The Enron reporting-gap demo
+
+The markets warehouse shows the engine catching abuse in a live order book. A
+third warehouse shows it against the case the whole "a number you can put in
+front of a regulator" thesis is haunted by: Enron's FY2000 10-K, where the
+reported numbers and the underlying reality had famously come apart. Two
+scenarios reconstruct the two mechanics of that gap, and both compute the
+reported figure *and* the underlying figure in a single guarded query, so the
+distance between them is a grounded, hash-chained, tamper-evident result rather
+than an assertion.
+
+```bash
+node bin/fintel.js enron seed       # entities, revenue deals, debt instruments, reported line items
+node bin/fintel.js enron revenue    # revenue as reported (gross) vs merchant margin (net)
+node bin/fintel.js enron debt       # reported debt vs true debt incl. off-balance-sheet SPEs
+node bin/fintel.js enron audit      # verify the Enron audit chain
+```
+
+| Scenario | What it shows | The real anchor |
+|----------|---------------|-----------------|
+| **Revenue basis** | Revenue booked *gross* (full trade notional) versus the *net* merchant margin actually earned | Gross reconciles to the reported **$100,789m** total revenues; net margin is **$1,953m** — the gross-basis booking is what turned $40bn into $100bn |
+| **Hidden debt** | Debt on the reported balance sheet versus the true total once the SPEs are included | Reported reconciles to the **$10,229m** short + long-term debt on the 10-K; the SPE vehicles (JEDI, Chewco, LJM1/2, Raptor, Whitewing) add the leverage that stayed off it |
+| **Tamper test** | Alter a recorded attestation and re-verify | The audit chain reports the exact entry that changed |
+
+The distinction that matters here is the one the rest of the project turns on.
+**The aggregates are real:** they reconcile to Enron's actual reported figures,
+transcribed verbatim from the filing (SEC accession `0001024401-01-500010`) into
+`db/enron-anchor.md` and stored in a `reported_financials` table that carries the
+citation on every row. **The transaction-level rows are synthetic** — there is no
+public Enron general ledger — and the off-balance-sheet SPE amounts are
+illustrative of the mechanism, not a claimed exact historical total. Real anchor
+figures are labelled real; fabricated rows are labelled fabricated. That
+labelling is not incidental to the demo; it *is* the demo. (Money here is integer
+USD millions, the grain a 10-K prints, so a computed figure grounds against the
+filing verbatim — a deliberate departure from the other warehouses' integer
+cents, documented in `db/enron-schema.sql`.)
+
 ## What is real here, and what is not
 
 **Real:** the guard (table *and* column allow-lists, a wall-clock query budget,
 a row-level scope hook driven by an authenticated principal), read-only
 enforcement behind a warehouse-connector interface (SQLite reference adapter),
-two SQLite warehouses (SaaS finance and capital markets), a first-class metric
-registry the scenarios resolve against, lineage capture and hashing, the
+three SQLite warehouses (SaaS finance, capital markets, and a synthetic Enron
+reporting-gap POC whose aggregates reconcile to real 10-K figures), a first-class
+metric registry the scenarios resolve against, lineage capture and hashing, the
 hash-chained audit log with Ed25519 signing and a pluggable external-anchoring
 hook, grounding verification (unit-aware, and able to check derived figures the
-query returns), the CLI, and 88 tests that run offline.
+query returns), the CLI, and 96 tests that run offline.
 
 **Synthetic:** the data. 416 customers over six months, generated
 deterministically from a fixed seed so that the same question always produces
@@ -197,6 +235,8 @@ its result, and a chain that shows the record has not been edited since.
 ```
 db/schema.sql          SaaS warehouse: four tables; money in integer cents
 db/markets-schema.sql  markets warehouse: accounts, orders, executions, prices, positions
+db/enron-schema.sql    Enron POC warehouse: entities, revenue, debt, reported financials (USD millions)
+db/enron-anchor.md     Enron's real reported figures, cited to the 10-K (the aggregate anchor)
 src/db.js              read-only connection, deterministic seed, wall-clock query budget
 src/guard.js           the security boundary (table + column allow-lists, scope/as-of hooks)
 src/planner.js         question → SQL (structured output, Claude Opus 4.8)
@@ -210,9 +250,10 @@ src/warehouse.js       connector interface: SQLite adapter + Snowflake shape
 src/registry.js        first-class metric / semantic registry
 src/auth.js            authentication + per-principal row-level security
 src/markets.js         capital-markets warehouse, metric layer, surveillance scenarios
+src/enron.js           Enron POC warehouse, reporting-gap scenarios (real anchors, synthetic rows)
 src/ask.js             the pipeline
 bin/fintel.js          CLI
-test/                  88 tests, none requiring a credential
+test/                  96 tests, none requiring a credential
 ```
 
 Requires Node 22+ (`node:sqlite` is built in, so there is no native database
