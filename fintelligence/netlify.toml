@@ -1,3 +1,4 @@
+# Pre-built static site — nothing to compile. Used if the Netlify base directory
+# is set to this folder; otherwise the root netlify.toml governs the deploy.
 [build]
-  command = "npm run build"
-  publish = "dist"
+  publish = "."
