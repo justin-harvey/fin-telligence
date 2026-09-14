@@ -22,8 +22,10 @@ question
 
 | Path | What it is |
 |------|-----------|
-| [`fintelligence-core/`](fintelligence-core/) | **The working engine.** A Node.js CLI and library that implements the full pipeline above: guard, read-only warehouse, grounding verifier, lineage capture, and a tamper-evident audit chain. 88 tests, no API credential required to run most of them. |
+| [`fintelligence-core/`](fintelligence-core/) | **The working engine.** A Node.js CLI and library that implements the full pipeline above: guard, read-only warehouse, grounding verifier, lineage capture, and a tamper-evident audit chain. 125 tests, no API credential required to run most of them. |
 | [`fintelligence/`](fintelligence/) | **The prototype site** deployed at [fin-telligence.netlify.app](https://fin-telligence.netlify.app/). It argues for the thesis; the core repository does it. |
+| [`fintelligence/enron.html`](fintelligence/enron.html) | **The Enron reporting-gap case study**, live at [fin-telligence.netlify.app/enron](https://fin-telligence.netlify.app/enron) — reported FY2000 figures set against what the underlying rows support, each grounded and hash-chained. |
+| [`fintelligence/controls.html`](fintelligence/controls.html) | **The SOC 2 evidence panel**, live at [fin-telligence.netlify.app/controls](https://fin-telligence.netlify.app/controls) — one-click controls that return PASS/EXCEPTION with a verifiable evidence trail. |
 
 The prototype makes the case. The core makes it executable. Start with the [`fintelligence-core/` README](fintelligence-core/README.md) for the full technical account.
 
