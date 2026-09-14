@@ -328,3 +328,48 @@ export function reconcileReportedDebt({
     });
     return { rows, lineage, entry };
 }
+
+/**
+ * Reconciliation query — gross revenue computed from the deal ledger versus the
+ * total revenues figure as filed in the 10-K, in one attested statement. A
+ * processing-integrity control passes only when they tie out; a variance means
+ * the booked deals no longer sum to what was reported.
+ *
+ * @param {object} [params]
+ * @param {number} [params.fiscalYear]
+ * @param {string} [params.dbPath]
+ * @param {string} [params.logPath]
+ * @param {object|null} [params.signer]
+ * @param {{ query: Function }} [params.warehouse]
+ * @returns {{ rows: object[], lineage: object, entry: object }}
+ */
+export function reconcileReportedRevenue({
+    fiscalYear = FISCAL_YEAR,
+    dbPath = ENRON_DB_PATH,
+    logPath = ENRON_LOG_PATH,
+    signer = null,
+    warehouse = new SqliteWarehouse(dbPath),
+} = {}) {
+    const sql =
+        'SELECT ' +
+        '(SELECT SUM(gross_notional_usd_millions) FROM revenue_transactions ' +
+        'WHERE fiscal_year = ?) AS ledger_gross_usd_millions, ' +
+        "(SELECT SUM(amount_usd_millions) FROM reported_financials " +
+        "WHERE fiscal_year = ? AND line_item = 'Total revenues') AS filed_revenue_usd_millions";
+    const guarded = guard(sql, guardOptions);
+    const rows = warehouse.query(guarded.sql, { params: [fiscalYear, fiscalYear] });
+
+    const lineage = buildLineage({
+        question: `FY${fiscalYear} gross revenue reconciled to total revenues as filed in the 10-K`,
+        sql: guarded.sql,
+        tables: guarded.tables,
+        rows,
+        limitInjected: guarded.limitInjected,
+    });
+    const entry = append({ ...lineage, scenario: 'revenue_reconciliation', fiscalYear }, {
+        path: logPath,
+        complianceTags: ['reconciliation', 'revenue recognition', 'reproducible'],
+        signer,
+    });
+    return { rows, lineage, entry };
+}

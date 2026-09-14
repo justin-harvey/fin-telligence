@@ -19,7 +19,63 @@
  */
 
 import { CONTROL_STATUS, controlResult } from './evidence.js';
-import { reconcileReportedDebt } from './enron.js';
+import { reconcileReportedDebt, reconcileReportedRevenue } from './enron.js';
+import { reconcileMrr } from './saas.js';
+
+/**
+ * Shared shape for a reconciliation control: run a query that returns two
+ * figures that must be equal, and turn the comparison into a control result.
+ * Keeps every reconciliation control asserting the same way.
+ *
+ * @param {object} params
+ * @param {string} params.controlId
+ * @param {string} params.criterion
+ * @param {string} params.description
+ * @param {{ rows: object[], entry: object, lineage: object }} params.run  the executed query
+ * @param {string} params.leftKey   column holding the first figure
+ * @param {string} params.rightKey  column holding the second figure
+ * @param {string} params.leftLabel
+ * @param {string} params.rightLabel
+ * @param {string} params.unit
+ * @param {(v: number) => string} [params.fmt]  how to render a figure in the exception text
+ * @returns {{ control: object, entry: object, rows: object[], lineage: object }}
+ */
+function reconciliation({
+    controlId,
+    criterion,
+    description,
+    run,
+    leftKey,
+    rightKey,
+    leftLabel,
+    rightLabel,
+    unit,
+    fmt = (v) => String(v),
+}) {
+    const { rows, entry, lineage } = run;
+    const r = rows[0] ?? {};
+    const left = Number(r[leftKey]);
+    const right = Number(r[rightKey]);
+    const variance = left - right;
+    const status = variance === 0 ? CONTROL_STATUS.PASS : CONTROL_STATUS.EXCEPTION;
+
+    const control = controlResult({
+        controlId,
+        criterion,
+        description,
+        status,
+        exception:
+            status === CONTROL_STATUS.EXCEPTION
+                ? `${leftLabel} (${fmt(left)}) does not tie to ${rightLabel} (${fmt(right)}); variance ${fmt(variance)}`
+                : null,
+        figures: [
+            { label: leftLabel, value: left, unit },
+            { label: rightLabel, value: right, unit },
+            { label: 'Variance', value: variance, unit },
+        ],
+    });
+    return { control, entry, rows, lineage };
+}
 
 /**
  * @typedef {object} ControlDefinition
@@ -37,38 +93,67 @@ import { reconcileReportedDebt } from './enron.js';
  * @returns {ControlDefinition[]}
  */
 export function controlCatalog() {
+    const usdM = (v) => `$${Number(v).toLocaleString('en-US')}m`;
+    const usd = (v) => `$${(Number(v) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
     return [
         {
             id: 'PI1.2-enron-debt-reconciliation',
             criterion: 'Processing Integrity (PI1.2) — reported figures reconcile to source records',
             warehouse: 'enron',
-            description:
-                'Reported debt computed from the ledger ties out to the figure as filed in the 10-K.',
+            description: 'Reported debt computed from the ledger ties out to the figure as filed in the 10-K.',
             run(options = {}) {
-                const { rows, lineage, entry } = reconcileReportedDebt(options);
-                const r = rows[0] ?? {};
-                const ledger = Number(r.ledger_reported_usd_millions);
-                const filed = Number(r.filed_reported_usd_millions);
-                const variance = ledger - filed;
-                const status = variance === 0 ? CONTROL_STATUS.PASS : CONTROL_STATUS.EXCEPTION;
-
-                const control = controlResult({
+                return reconciliation({
                     controlId: 'PI1.2',
                     criterion: this.criterion,
                     description: this.description,
-                    status,
-                    exception:
-                        status === CONTROL_STATUS.EXCEPTION
-                            ? `ledger-computed reported debt $${ledger}m does not tie to the filed $${filed}m ` +
-                              `(variance $${variance}m)`
-                            : null,
-                    figures: [
-                        { label: 'Reported debt (from ledger)', value: ledger, unit: 'usd_millions' },
-                        { label: 'Reported debt (as filed, 10-K)', value: filed, unit: 'usd_millions' },
-                        { label: 'Variance', value: variance, unit: 'usd_millions' },
-                    ],
+                    run: reconcileReportedDebt(options),
+                    leftKey: 'ledger_reported_usd_millions',
+                    rightKey: 'filed_reported_usd_millions',
+                    leftLabel: 'Reported debt (from ledger)',
+                    rightLabel: 'Reported debt (as filed, 10-K)',
+                    unit: 'usd_millions',
+                    fmt: usdM,
                 });
-                return { control, entry, rows, lineage };
+            },
+        },
+        {
+            id: 'PI1.1-enron-revenue-reconciliation',
+            criterion: 'Processing Integrity (PI1.1) — revenue recognised on the correct basis',
+            warehouse: 'enron',
+            description: 'Gross revenue booked in the deal ledger ties out to total revenues as filed in the 10-K.',
+            run(options = {}) {
+                return reconciliation({
+                    controlId: 'PI1.1',
+                    criterion: this.criterion,
+                    description: this.description,
+                    run: reconcileReportedRevenue(options),
+                    leftKey: 'ledger_gross_usd_millions',
+                    rightKey: 'filed_revenue_usd_millions',
+                    leftLabel: 'Gross revenue (from ledger)',
+                    rightLabel: 'Total revenues (as filed, 10-K)',
+                    unit: 'usd_millions',
+                    fmt: usdM,
+                });
+            },
+        },
+        {
+            id: 'PI1.2-saas-mrr-reconciliation',
+            criterion: 'Processing Integrity (PI1.2) — MRR reconciles across independent sources',
+            warehouse: 'saas',
+            description: 'Current MRR from the movements ledger ties out to active subscriptions plus recorded adjustments.',
+            run(options = {}) {
+                return reconciliation({
+                    controlId: 'PI1.2',
+                    criterion: this.criterion,
+                    description: this.description,
+                    run: reconcileMrr(options),
+                    leftKey: 'ledger_mrr_cents',
+                    rightKey: 'reconstructed_mrr_cents',
+                    leftLabel: 'Current MRR (from ledger)',
+                    rightLabel: 'Current MRR (subscriptions + adjustments)',
+                    unit: 'cents',
+                    fmt: usd,
+                });
             },
         },
     ];

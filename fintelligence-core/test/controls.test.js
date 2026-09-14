@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { seedEnron } from '../src/enron.js';
+import { seed as seedSaas } from '../src/db.js';
 import { controlCatalog, getControl } from '../src/controls.js';
 import { generateCompliancePacket, verifyPacket, CONTROL_STATUS } from '../src/evidence.js';
 
@@ -25,7 +26,7 @@ function freshLog() {
 const CONTROL_ID = 'PI1.2-enron-debt-reconciliation';
 
 test('the catalog resolves controls by id and rejects unknown ones', () => {
-    assert.ok(controlCatalog().length >= 1);
+    assert.ok(controlCatalog().length >= 3);
     assert.equal(getControl(CONTROL_ID).id, CONTROL_ID);
     assert.throws(() => getControl('no-such-control'));
 });
@@ -71,4 +72,42 @@ test('a control result flows into an evidence packet that verifies offline', () 
 
     assert.equal(packet.control.status, CONTROL_STATUS.PASS);
     assert.equal(verifyPacket(packet).ok, true);
+});
+
+test('the Enron revenue reconciliation PASSES on clean data and flags a trimmed deal', () => {
+    const db = freshDb('rev');
+    seedEnron(db);
+    const control = getControl('PI1.1-enron-revenue-reconciliation');
+
+    const clean = control.run({ dbPath: db, logPath: freshLog() });
+    assert.equal(clean.control.status, CONTROL_STATUS.PASS);
+    assert.equal(clean.rows[0].ledger_gross_usd_millions, 100_789);
+    assert.equal(clean.rows[0].filed_revenue_usd_millions, 100_789);
+
+    const w = new DatabaseSync(db);
+    w.exec("UPDATE revenue_transactions SET gross_notional_usd_millions = gross_notional_usd_millions - 1000 WHERE segment = 'metals'");
+    w.close();
+
+    const tampered = control.run({ dbPath: db, logPath: freshLog() });
+    assert.equal(tampered.control.status, CONTROL_STATUS.EXCEPTION);
+    assert.equal(tampered.rows[0].ledger_gross_usd_millions, 99_789);
+});
+
+test('the SaaS MRR reconciliation PASSES on clean data and flags an altered subscription', () => {
+    const db = freshDb('mrr');
+    seedSaas(db);
+    const control = getControl('PI1.2-saas-mrr-reconciliation');
+
+    const clean = control.run({ dbPath: db, logPath: freshLog() });
+    assert.equal(clean.control.status, CONTROL_STATUS.PASS);
+    assert.equal(clean.rows[0].ledger_mrr_cents, clean.rows[0].reconstructed_mrr_cents);
+
+    // Bump one active subscription's MRR without a matching ledger movement.
+    const w = new DatabaseSync(db);
+    w.exec('UPDATE subscriptions SET mrr_cents = mrr_cents + 100000 WHERE canceled_at IS NULL AND id = (SELECT id FROM subscriptions WHERE canceled_at IS NULL LIMIT 1)');
+    w.close();
+
+    const tampered = control.run({ dbPath: db, logPath: freshLog() });
+    assert.equal(tampered.control.status, CONTROL_STATUS.EXCEPTION);
+    assert.match(tampered.control.exception, /does not tie to/);
 });
