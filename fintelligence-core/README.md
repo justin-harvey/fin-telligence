@@ -29,9 +29,10 @@ node bin/fintel.js ask "How has MRR trended over the period?"
 node bin/fintel.js audit
 node bin/fintel.js audit --export audit-package.json
 
-# run SOC 2 controls, or serve the whole engine over MCP (stdio)
+# run SOC 2 controls, or serve the engine over MCP (stdio) or HTTP (for the web proxy)
 node bin/fintel.js controls run PI1.2-enron-debt-reconciliation --export packet.json
 node bin/fintel.js mcp
+ENGINE_SERVICE_TOKEN=secret node bin/fintel.js serve   # HTTP API behind a bearer token
 ```
 
 The guard, the database, the lineage record, and the audit chain all work with
@@ -201,7 +202,8 @@ control catalog whose entries assert PASS/EXCEPTION and emit that packet
 (`fintel controls run …`; six controls across all three warehouses — reconciliation,
 reproducibility, and audit-chain integrity), an MCP server that exposes the
 controls, canonical queries and audit verification as tools and each warehouse's
-live schema as a resource (`fintel mcp`, stdio), the CLI, and 120 tests that run offline.
+live schema as a resource (`fintel mcp`, stdio) plus a token-guarded HTTP API for a
+web proxy (`fintel serve`), the CLI, and 125 tests that run offline.
 
 **Synthetic:** the data. 416 customers over six months, generated
 deterministically from a fixed seed so that the same question always produces
@@ -267,9 +269,10 @@ src/controls.js        the SOC 2 control catalog (queries that assert PASS/EXCEP
 src/warehouses.js      warehouse descriptors + live PRAGMA schema (allow-list filtered)
 src/mcp.js             MCP tools + resources (pure, transport-free)
 src/mcp-server.js      the stdio MCP transport (the only file that imports the SDK)
+src/http-server.js     HTTP JSON API over the same handlers (what the web proxy calls)
 src/ask.js             the pipeline
 bin/fintel.js          CLI
-test/                  120 tests, none requiring a credential
+test/                  125 tests, none requiring a credential
 ```
 
 Requires Node 22+ (`node:sqlite` is built in, so there is no native database

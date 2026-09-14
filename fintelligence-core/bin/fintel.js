@@ -450,6 +450,19 @@ async function main() {
             break;
         }
 
+        case 'serve': {
+            const portArg = rest[rest.indexOf('--port') + 1];
+            const port = Number(portArg ?? process.env.PORT ?? 8787);
+            const { startApiServer } = await import('../src/http-server.js');
+            await startApiServer({ port });
+            const authed = Boolean(process.env.ENGINE_SERVICE_TOKEN);
+            console.error(
+                `fintel HTTP API on :${port} — ${authed ? 'bearer-token required' : 'NO TOKEN (dev; set ENGINE_SERVICE_TOKEN)'}. ` +
+                    `Routes: GET /health, GET /tools, POST /tools/<name>, GET /resources.`,
+            );
+            break;
+        }
+
         case 'mcp': {
             try {
                 const { startMcpServer } = await import('../src/mcp-server.js');
@@ -478,6 +491,7 @@ async function main() {
             console.log('  fintel enron <sub>               synthetic Enron reporting-gap demo');
             console.log('  fintel controls <sub>            run SOC 2 controls (PASS/EXCEPTION + evidence)');
             console.log('  fintel mcp                       serve the engine over MCP (stdio)');
+            console.log('  fintel serve [--port N]          serve the engine over HTTP (for the web proxy)');
             process.exitCode = command ? 2 : 0;
     }
 }
