@@ -3,7 +3,7 @@
 **Financial answers you can audit. The model writes SQL, the database produces the numbers, and every figure in the answer is verified against the data before you see it.**
 
 [![Prototype](https://img.shields.io/badge/prototype-live-brightgreen.svg)](https://fin-telligence.netlify.app/)
-[![Core tests](https://img.shields.io/badge/core-96%20tests%2C%20offline-blue.svg)](fintelligence-core/)
+[![Core tests](https://img.shields.io/badge/core-103%20tests%2C%20offline-blue.svg)](fintelligence-core/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 The premise is simple: a language model is excellent at turning a question into SQL, and terrible at being trusted with the arithmetic. So it is never trusted with the arithmetic. The model writes a query, a read-only database returns the rows, and a verifier checks that every number in the prose actually came from those rows. What you get back is either a grounded answer with a full provenance trail, or an explicit refusal. Never an unverified paragraph presented as fact.

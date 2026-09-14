@@ -30,6 +30,13 @@ import {
     ENRON_LOG_PATH,
     FISCAL_YEAR,
 } from '../src/enron.js';
+import {
+    controlResult,
+    CONTROL_STATUS,
+    generateCompliancePacket,
+    verifyPacket,
+    renderPacketMarkdown,
+} from '../src/evidence.js';
 
 const [, , command, ...rest] = process.argv;
 
@@ -51,6 +58,28 @@ function printRows(rows, limit = 12) {
         console.log('  ' + columns.map((c, i) => String(row[c]).padEnd(widths[i])).join('  '));
     }
     if (rows.length > limit) console.log(`  … ${rows.length - limit} more row(s)`);
+}
+
+/** `--export <path>` value, or null. Accepts `.json` (packet) or `.md` (rendered). */
+function exportPath(args) {
+    const i = args.indexOf('--export');
+    return i >= 0 ? args[i + 1] ?? null : null;
+}
+
+/**
+ * Write an evidence packet for one attested control result to `path`. A `.md`
+ * path renders the human-readable packet; anything else writes the JSON packet.
+ * Always self-verifies and prints the result, so the export is never trusted blind.
+ */
+function writePacket(path, { control, rows, entry, publicKey }) {
+    const packet = generateCompliancePacket({ control, entry, rows, publicKey });
+    const body = path.endsWith('.md') ? renderPacketMarkdown(packet) : `${JSON.stringify(packet, null, 2)}\n`;
+    writeFileSync(path, body, 'utf8');
+    const check = verifyPacket(packet);
+    console.log(`\nEvidence packet → ${path}`);
+    console.log(`  self-verifies : ${check.ok ? 'VERIFIED' : 'FAILED'}  (${Object.entries(check.checks)
+        .map(([k, v]) => `${k}=${v === null ? 'n/a' : v}`)
+        .join(', ')})`);
 }
 
 async function main() {
@@ -275,6 +304,24 @@ async function main() {
                     console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
                     console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
                     console.log('  signature       :', entry.signature ? `signed (key ${entry.signingKeyId})` : 'unsigned');
+                    const revPacket = exportPath(rest);
+                    if (revPacket) {
+                        writePacket(revPacket, {
+                            rows,
+                            entry,
+                            publicKey: signer?.publicKey ?? null,
+                            control: controlResult({
+                                controlId: 'PI1.1',
+                                criterion: 'Processing Integrity — revenue recognised on the correct basis',
+                                description: `FY${FISCAL_YEAR} revenue as reported (gross) versus merchant margin (net).`,
+                                status: CONTROL_STATUS.PASS,
+                                figures: [
+                                    { label: 'Reported gross revenue', value: r.revenue_gross_usd_millions, unit: 'usd_millions' },
+                                    { label: 'Net merchant margin', value: r.revenue_net_usd_millions, unit: 'usd_millions' },
+                                ],
+                            }),
+                        });
+                    }
                     break;
                 }
                 case 'debt': {
@@ -294,6 +341,24 @@ async function main() {
                     console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
                     console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
                     console.log('  compliance tags :', entry.complianceTags.join(' · '));
+                    const debtPacket = exportPath(rest);
+                    if (debtPacket) {
+                        writePacket(debtPacket, {
+                            rows,
+                            entry,
+                            publicKey: signer?.publicKey ?? null,
+                            control: controlResult({
+                                controlId: 'PI1.2',
+                                criterion: 'Processing Integrity — reported figures reconcile to underlying records',
+                                description: `FY${FISCAL_YEAR} reported debt versus true debt including off-balance-sheet SPEs.`,
+                                status: CONTROL_STATUS.PASS,
+                                figures: [
+                                    { label: 'Reported debt', value: r.reported_debt_usd_millions, unit: 'usd_millions' },
+                                    { label: 'True debt incl. SPEs', value: r.total_debt_incl_spe_usd_millions, unit: 'usd_millions' },
+                                ],
+                            }),
+                        });
+                    }
                     break;
                 }
                 case 'audit': {
@@ -318,6 +383,7 @@ async function main() {
                     console.log('  fintel enron revenue       reported (gross) vs merchant (net) revenue, attested');
                     console.log('  fintel enron debt          reported vs true debt incl. off-balance-sheet SPEs');
                     console.log('  fintel enron audit         verify the Enron audit chain');
+                    console.log('    add --export <file.json|.md>   write a verifiable evidence packet');
                     process.exitCode = sub ? 2 : 0;
             }
             break;
