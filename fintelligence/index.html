@@ -2,7 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" href="/assets/phineas/phin.png" />
+    <link rel="apple-touch-icon" href="/assets/phineas/phin.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fin-Telligence: Financial Intelligence Layer</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -13,5 +14,129 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!-- Phineas the dolphin — mascot, mounted under "About this prototype" once the app renders. -->
+    <style>
+      #phineas-wrap { display: flex; flex-direction: column; align-items: center; margin: 18px auto 8px; position: relative; }
+      #phin-float { animation: phin-bob 3.2s ease-in-out infinite; line-height: 0; }
+      @keyframes phin-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+      #phineas { width: 66px; height: auto; image-rendering: pixelated; cursor: pointer; transition: transform .16s ease; user-select: none; -webkit-user-drag: none; }
+      #phineas:active { transform: scale(0.94); }
+      #phin-bubble {
+        position: absolute; bottom: 92px; left: 50%; transform: translateX(-50%) translateY(6px) scale(.96);
+        max-width: 250px; width: max-content; background: #fff; color: #111827;
+        font: 500 13px/1.45 Inter, sans-serif; padding: 10px 13px; border-radius: 13px;
+        box-shadow: 0 10px 30px rgba(0,0,0,.35); opacity: 0; transition: opacity .18s ease, transform .18s ease;
+        pointer-events: none; text-align: center; z-index: 50;
+      }
+      #phin-bubble.show { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+      #phin-bubble::after { content: ''; position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+        border: 7px solid transparent; border-top-color: #fff; border-bottom: 0; }
+      #phin-hint { font: 500 11px Inter, sans-serif; color: #6b7280; margin-top: 6px; opacity: .8; }
+    </style>
+    <script>
+      (function () {
+        var BASE = '/assets/phineas/';
+        var IMG = { phin: BASE + 'phin.png', blink: BASE + 'phin-blink.png', wink: BASE + 'phin-wink.png', menace: BASE + 'phin-menace.png' };
+        Object.keys(IMG).forEach(function (k) { var i = new Image(); i.src = IMG[k]; });
+
+        var LINES = [
+          "The model writes the SQL. It never touches the numbers. That's the whole trick.",
+          "Every figure is checked against the data before you see it — or you get an honest refusal.",
+          "Enron booked $100bn of revenue. The rows supported $1.9bn of margin. I'd have flagged it.",
+          "Reported debt was $10bn — the real leverage hid off the balance sheet. I show both.",
+          "Each answer carries a hash. Alter it later and the whole chain tells on you.",
+          "SOC 2 auditors want evidence, not vibes — I hand them a signed packet.",
+          "No black boxes, no guesswork. Just numbers you can put in front of a regulator.",
+          "Click a control on the SOC 2 panel and I'll reconcile it live: PASS, or the exact variance."
+        ];
+
+        var busy = false; // guards blink from stomping wink/menace/talking
+
+        function mount(anchor) {
+          if (document.getElementById('phineas-wrap')) return;
+          var wrap = document.createElement('div');
+          wrap.id = 'phineas-wrap';
+          var bubble = document.createElement('div');
+          bubble.id = 'phin-bubble';
+          var float = document.createElement('div');
+          float.id = 'phin-float';
+          var img = document.createElement('img');
+          img.id = 'phineas'; img.src = IMG.phin; img.alt = 'Phineas the dolphin'; img.title = 'psst — click me';
+          float.appendChild(img);
+          wrap.appendChild(bubble); wrap.appendChild(float);
+          var hint = document.createElement('div');
+          hint.id = 'phin-hint'; hint.textContent = 'click Phineas';
+          wrap.appendChild(hint);
+          // Place Phineas below the link's block, so he sits under it rather than beside it.
+          var host = anchor.parentElement && anchor.parentElement !== document.body ? anchor.parentElement : anchor;
+          host.parentNode.insertBefore(wrap, host.nextSibling);
+          animate(img, bubble, hint);
+        }
+
+        function flash(img, key, ms, cb) {
+          busy = true; img.src = IMG[key];
+          setTimeout(function () { img.src = IMG.phin; busy = false; if (cb) cb(); }, ms);
+        }
+
+        function blink(img, dbl) {
+          if (busy) return;
+          img.src = IMG.blink;
+          setTimeout(function () {
+            img.src = IMG.phin;
+            if (dbl) setTimeout(function () { img.src = IMG.blink; setTimeout(function () { img.src = IMG.phin; }, 140); }, 120);
+          }, 150);
+        }
+
+        function animate(img, bubble, hint) {
+          setInterval(function () { blink(img, Math.random() < 0.25); }, 8000); // blink every 8s, ~1-in-4 double
+
+          (function scheduleWink() {
+            setTimeout(function () {
+              if (!busy) flash(img, 'wink', 600);
+              scheduleWink();
+            }, 60000 + Math.random() * 60000); // a wink every 1–2 minutes
+          })();
+
+          // Menace when the visitor clicks a link that navigates away.
+          document.addEventListener('click', function (e) {
+            if (!e.target.closest) return;
+            if (e.target.closest('#phineas')) return;
+            if (!e.target.closest('a[href], [role="link"]')) return;
+            busy = true; img.src = IMG.menace; img.style.transform = 'scale(1.12)';
+            setTimeout(function () { img.src = IMG.phin; img.style.transform = ''; busy = false; }, 1400);
+          }, true);
+
+          // Click Phineas → he talks about the product (and gives you a look).
+          var lineIdx = 0, bubbleTimer;
+          img.addEventListener('click', function (e) {
+            e.preventDefault(); e.stopPropagation();
+            if (hint) hint.style.display = 'none';
+            bubble.textContent = LINES[lineIdx % LINES.length];
+            lineIdx++;
+            bubble.classList.add('show');
+            clearTimeout(bubbleTimer);
+            bubbleTimer = setTimeout(function () { bubble.classList.remove('show'); }, 5600);
+            busy = true; img.src = IMG.menace; img.style.transform = 'scale(1.1)';
+            setTimeout(function () { img.src = IMG.phin; img.style.transform = ''; busy = false; }, 1300);
+          });
+        }
+
+        function findAnchor() {
+          var els = document.querySelectorAll('a, button');
+          for (var i = 0; i < els.length; i++) {
+            if (/about this prototype/i.test(els[i].textContent || '')) return els[i];
+          }
+          return null;
+        }
+        function tryMount() { var a = findAnchor(); if (a) { mount(a); return true; } return false; }
+
+        if (!tryMount()) {
+          var obs = new MutationObserver(function () { if (tryMount()) obs.disconnect(); });
+          obs.observe(document.documentElement, { childList: true, subtree: true });
+          setTimeout(function () { obs.disconnect(); }, 20000); // give up quietly if the link never appears
+        }
+      })();
+    </script>
   </body>
 </html>
