@@ -20,10 +20,10 @@
       #phineas-wrap { display: flex; flex-direction: column; align-items: center; margin: 18px auto 8px; position: relative; }
       #phin-float { animation: phin-bob 3.2s ease-in-out infinite; line-height: 0; }
       @keyframes phin-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
-      #phineas { width: 66px; height: auto; image-rendering: pixelated; cursor: pointer; transition: transform .16s ease; user-select: none; -webkit-user-drag: none; }
+      #phineas { width: 198px; height: auto; image-rendering: pixelated; cursor: pointer; transition: transform .16s ease; user-select: none; -webkit-user-drag: none; }
       #phineas:active { transform: scale(0.94); }
       #phin-bubble {
-        position: absolute; bottom: 92px; left: 50%; transform: translateX(-50%) translateY(6px) scale(.96);
+        position: absolute; bottom: 230px; left: 50%; transform: translateX(-50%) translateY(6px) scale(.96);
         max-width: 250px; width: max-content; background: #fff; color: #111827;
         font: 500 13px/1.45 Inter, sans-serif; padding: 10px 13px; border-radius: 13px;
         box-shadow: 0 10px 30px rgba(0,0,0,.35); opacity: 0; transition: opacity .18s ease, transform .18s ease;
@@ -48,7 +48,13 @@
           "Each answer carries a hash. Alter it later and the whole chain tells on you.",
           "SOC 2 auditors want evidence, not vibes — I hand them a signed packet.",
           "No black boxes, no guesswork. Just numbers you can put in front of a regulator.",
-          "Click a control on the SOC 2 panel and I'll reconcile it live: PASS, or the exact variance."
+          "Click a control on the SOC 2 panel and I'll reconcile it live: PASS, or the exact variance.",
+          "I watched a government agency keep a $50K salary on staff just to write SQL all day. That hidden cost is exactly what I kill.",
+          "Finance teams burn 20 to 40 hours a month reconciling numbers before a board deck. I hand that time back.",
+          "Ask in plain English, get an audit-ready answer in minutes with full lineage, not a three-week email chase.",
+          "Teams love the speed of AI but won't put it near a board deck or a regulator. Closing that trust gap is the whole point.",
+          "Make AI numbers provable and SOX-ready and the regulated, high-ACV buyers suddenly come into reach.",
+          "Early win looks like this: board reporting in hours not days, and an audit package a regulator would actually accept."
         ];
 
         var busy = false; // guards blink from stomping wink/menace/talking
@@ -89,7 +95,7 @@
         }
 
         function animate(img, bubble, hint) {
-          setInterval(function () { blink(img, Math.random() < 0.25); }, 8000); // blink every 8s, ~1-in-4 double
+          setInterval(function () { blink(img, Math.random() < 0.25); }, 2600); // blink often, ~1-in-4 double
 
           (function scheduleWink() {
             setTimeout(function () {

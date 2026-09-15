@@ -123,6 +123,48 @@
       footer.site { border-top: 1px solid var(--line); margin-top: 48px; padding: 28px 0 56px; color: var(--muted); font-size: 13px; }
       .src { font-size: 12px; color: var(--muted); margin-top: 10px; }
       .src code { color: #c7cede; }
+
+      /* --- Phineas (mascot) in the hero --- */
+      .hero-grid { display: flex; gap: 36px; align-items: center; }
+      .hero-copy { flex: 1 1 auto; min-width: 0; }
+      .phin-aside { flex: 0 0 auto; width: 240px; display: flex; flex-direction: column; align-items: center; position: relative; }
+      #phin-float { animation: phin-bob 3.2s ease-in-out infinite; line-height: 0; }
+      @keyframes phin-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+      #phin { width: 200px; height: auto; image-rendering: pixelated; cursor: pointer; transition: transform .16s ease; user-select: none; -webkit-user-drag: none; }
+      #phin:active { transform: scale(.94); }
+      #phin-bubble {
+        position: absolute; bottom: 232px; left: 50%; transform: translateX(-50%) translateY(6px) scale(.96);
+        max-width: 262px; width: max-content; background: #fff; color: #111827;
+        font: 500 13px/1.45 Inter, sans-serif; padding: 11px 14px; border-radius: 13px;
+        box-shadow: 0 12px 34px rgba(0,0,0,.45); opacity: 0; transition: opacity .18s ease, transform .18s ease;
+        pointer-events: none; text-align: center; z-index: 20;
+      }
+      #phin-bubble.show { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+      #phin-bubble::after { content: ''; position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
+        border: 7px solid transparent; border-top-color: #fff; border-bottom: 0; }
+      #phin-hint { font: 500 11px Inter, sans-serif; color: var(--muted); margin-top: 8px; opacity: .85; }
+
+      /* --- architectural comparison --- */
+      .cmp-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--panel-2); }
+      table.cmp { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 620px; }
+      table.cmp th, table.cmp td { text-align: left; vertical-align: top; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+      table.cmp tr:last-child td, table.cmp tr:last-child th { border-bottom: none; }
+      table.cmp thead th { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
+      table.cmp th.feat { width: 150px; color: var(--text); font-weight: 600; }
+      table.cmp td.std { color: var(--muted); }
+      table.cmp td.ft { color: #c7cede; }
+      table.cmp td.ft b, table.cmp th.feat b { color: var(--text); }
+      .distinct { margin: 18px 0 0; padding-left: 0; list-style: none; }
+      .distinct li { padding: 12px 0; border-top: 1px dashed var(--line); font-size: 14px; color: #c7cede; }
+      .distinct li:first-child { border-top: none; }
+      .distinct b { color: var(--text); }
+      code.inl { color: #c7cede; background: rgba(99,102,241,0.12); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
+      @media (max-width: 760px) {
+        .hero-grid { flex-direction: column-reverse; align-items: center; gap: 12px; }
+        .phin-aside { width: 200px; }
+        #phin { width: 168px; }
+        #phin-bubble { bottom: 200px; }
+      }
     </style>
   </head>
   <body>
@@ -135,15 +177,88 @@
 
     <main class="wrap">
       <section class="hero">
-        <p class="kicker">Case study · reporting-gap attestation</p>
-        <h1>The Enron reporting gap<br /><span class="thin">what was reported, versus what the rows support.</span></h1>
-        <p class="lede">
-          Enron's FY2000 annual report is the case the whole thesis is haunted by: numbers that
-          were internally consistent on paper and disconnected from reality. Fin-Telligence runs
-          the same verified pipeline over it, computing the <em>reported</em> figure and the
-          <em>underlying</em> figure in one guarded query &mdash; so the distance between them is a
-          grounded, hash-chained, tamper-evident result, not an assertion.
+        <div class="hero-grid">
+          <div class="hero-copy">
+            <p class="kicker">Case study · reporting-gap attestation</p>
+            <h1>The Enron reporting gap<br /><span class="thin">what was reported, versus what the rows support.</span></h1>
+            <p class="lede">
+              Enron's FY2000 annual report is the case the whole thesis is haunted by: numbers that
+              were internally consistent on paper and disconnected from reality. Fin-Telligence runs
+              the same verified pipeline over it, computing the <em>reported</em> figure and the
+              <em>underlying</em> figure in one guarded query, so the distance between them is a
+              grounded, hash-chained, tamper-evident result, not an assertion.
+            </p>
+          </div>
+          <aside class="phin-aside">
+            <div id="phin-bubble">Psst, click me. I'll tell you how this pipeline differs from the usual financial AI.</div>
+            <div id="phin-float"><img id="phin" src="/assets/phineas/phin.png" alt="Phineas the dolphin" title="psst, click me" /></div>
+            <div id="phin-hint">click Phin</div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>How this differs from previous solutions</h2>
+        <p class="lede" style="font-size:16px;max-width:760px">
+          The individual patterns here (AST parsing, read-only database flags, regex output checks,
+          and cryptographic hash logs) are standard computer-science primitives. Combining them into a
+          zero-tolerance <b style="color:var(--text)">ground-or-refuse pipeline with cryptographic
+          attestation</b> is an uncommon design choice next to standard financial AI tools.
         </p>
+        <div class="disc" style="margin:18px 0 24px">
+          Most commercial text-to-SQL and financial-AI platforms prioritise <b>helpfulness and
+          flexibility</b>, handing the user a best-guess answer. Fin-Telligence prioritises
+          <b>non-repudiation and hard refusal</b>.
+        </div>
+
+        <div class="cmp-wrap">
+          <table class="cmp">
+            <thead>
+              <tr><th class="feat">Feature</th><th>Standard financial AI / text-to-SQL</th><th>Fin-Telligence architecture</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th class="feat">SQL safety</th>
+                <td class="std">System prompts (&ldquo;only write SELECT&rdquo;) or generic DB permissions</td>
+                <td class="ft">Pre-execution AST parsing (<code class="inl">guard.js</code>) enforcing SELECT-only, CTE allow-lists, and forced <code class="inl">LIMIT</code> bounds</td>
+              </tr>
+              <tr>
+                <th class="feat">Numeric accuracy</th>
+                <td class="std">LLM-as-a-judge or prompt engineering to format DB rows</td>
+                <td class="ft">Deterministic post-prose verification (<code class="inl">grounding.js</code>) that matches <b>every</b> number back to SQL row outputs</td>
+              </tr>
+              <tr>
+                <th class="feat">Failure mode</th>
+                <td class="std">Best-guess response with potential rounding or hallucination errors</td>
+                <td class="ft"><b>Explicit refusal.</b> If a single number in the prose can't be mapped to the raw data, the response is destroyed</td>
+              </tr>
+              <tr>
+                <th class="feat">Audit logging</th>
+                <td class="std">Standard cloud event logs (CloudWatch / Datadog, SOC 2 trails)</td>
+                <td class="ft">Cryptographic hash-chaining (<code class="inl">audit.js</code>) where altering a past prompt, query, or output breaks chain verification</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 style="margin-top:34px">What makes it distinct</h2>
+        <ul class="distinct">
+          <li><b>Zero-tolerance output verification.</b> Guardrail frameworks like NeMo or Guardrails AI
+          evaluate semantic safety or prompt injection. Fin-Telligence treats numbers like foreign keys:
+          if the narrative claims <code class="inl">$100,789m</code> and that exact figure (or its unit
+          transform) isn't in the returned dataset, the pipeline aborts.</li>
+          <li><b>Trade-surveillance attestation.</b> Most AI audit logs track <em>who</em> sent a prompt,
+          for billing or security. Attaching a cryptographic hash-chain to regulatory queries (MiFID II /
+          MAR trade-abuse findings) stops internal operators from backdating or quietly altering a
+          surveillance flag.</li>
+        </ul>
+
+        <div class="disc" style="margin-top:22px">
+          <b>The main trade-off:</b> this architecture trades conversational fluidity for legal and audit
+          safety. It will refuse queries far more often than tools like ChatGPT or Koyfin whenever SQL
+          translation is imperfect or the math falls outside the verifier's allowed rules. For regulatory
+          reporting, forensic accounting, or internal compliance, that trade-off is usually the requirement.
+        </div>
       </section>
 
       <section class="section">
@@ -243,5 +358,58 @@ node bin/fintel.js <span class="p">enron audit</span>      <span class="c"># ver
         produces the numbers, and every figure is verified before you see it.
       </div>
     </footer>
+
+    <script>
+      (function () {
+        var BASE = '/assets/phineas/';
+        var IMG = { phin: BASE + 'phin.png', blink: BASE + 'phin-blink.png', wink: BASE + 'phin-wink.png', menace: BASE + 'phin-menace.png' };
+        Object.keys(IMG).forEach(function (k) { var i = new Image(); i.src = IMG[k]; });
+
+        var img = document.getElementById('phin');
+        var bubble = document.getElementById('phin-bubble');
+        var hint = document.getElementById('phin-hint');
+        if (!img) return;
+
+        var LINES = [
+          "These parts are all standard CS. Bolting them into a ground-or-refuse pipeline with a signed hash chain is the uncommon part.",
+          "Most text-to-SQL tools optimise for a helpful best guess. I optimise for non-repudiation and a hard refusal.",
+          "I treat numbers like foreign keys. If a figure in the prose isn't in the returned rows, the whole answer gets destroyed.",
+          "guard.js parses the SQL before it runs: SELECT only, allow-listed CTEs, forced LIMIT. No system-prompt promises.",
+          "Every prompt, query and output is hash-chained. Backdate or edit one later and the chain verification breaks.",
+          "The trade-off is real: I refuse more often than ChatGPT or Koyfin. For forensic and regulatory work, that's the point."
+        ];
+
+        var busy = false;
+        function blink(dbl) {
+          if (busy) return;
+          img.src = IMG.blink;
+          setTimeout(function () {
+            img.src = IMG.phin;
+            if (dbl) setTimeout(function () { img.src = IMG.blink; setTimeout(function () { img.src = IMG.phin; }, 140); }, 120);
+          }, 150);
+        }
+        setInterval(function () { blink(Math.random() < 0.3); }, 2500); // blink often
+
+        (function scheduleWink() {
+          setTimeout(function () {
+            if (!busy) { busy = true; img.src = IMG.wink; setTimeout(function () { img.src = IMG.phin; busy = false; }, 600); }
+            scheduleWink();
+          }, 45000 + Math.random() * 45000);
+        })();
+
+        var idx = 0, bubbleTimer;
+        img.addEventListener('click', function (e) {
+          e.preventDefault();
+          if (hint) hint.style.display = 'none';
+          bubble.textContent = LINES[idx % LINES.length];
+          idx++;
+          bubble.classList.add('show');
+          clearTimeout(bubbleTimer);
+          bubbleTimer = setTimeout(function () { bubble.classList.remove('show'); }, 6200);
+          busy = true; img.src = IMG.menace; img.style.transform = 'scale(1.08)';
+          setTimeout(function () { img.src = IMG.phin; img.style.transform = ''; busy = false; }, 1300);
+        });
+      })();
+    </script>
   </body>
 </html>
