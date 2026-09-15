@@ -33,6 +33,9 @@
       #phin-bubble::after { content: ''; position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
         border: 7px solid transparent; border-top-color: #fff; border-bottom: 0; }
       #phin-hint { font: 500 11px Inter, sans-serif; color: #6b7280; margin-top: 6px; opacity: .8; }
+      #phin-links { display: flex; flex-direction: column; align-items: center; gap: 5px; margin-top: 12px; }
+      #phin-links a { font: 500 12px Inter, sans-serif; color: #9CA3AF; text-decoration: none; transition: color .16s ease; }
+      #phin-links a:hover { color: #fff; }
     </style>
     <script>
       (function () {
@@ -74,6 +77,10 @@
           var hint = document.createElement('div');
           hint.id = 'phin-hint'; hint.textContent = 'click Phineas';
           wrap.appendChild(hint);
+          var links = document.createElement('div');
+          links.id = 'phin-links';
+          links.innerHTML = '<a href="/enron">See the Enron reporting gap &rarr;</a><a href="/controls">SOC 2 evidence panel &rarr;</a>';
+          wrap.appendChild(links);
           // Place Phineas below the link's block, so he sits under it rather than beside it.
           var host = anchor.parentElement && anchor.parentElement !== document.body ? anchor.parentElement : anchor;
           host.parentNode.insertBefore(wrap, host.nextSibling);
