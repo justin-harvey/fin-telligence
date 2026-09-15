@@ -397,12 +397,13 @@ node bin/fintel.js <span class="p">enron audit</span>      <span class="c"># ver
           }, 45000 + Math.random() * 45000);
         })();
 
-        var idx = 0, bubbleTimer;
+        var idx = 0, introShown = false, bubbleTimer;
+        var INTRO = "Hello, I'm Phineas. Hand-drawn, with one porpoise. Fin-Telligence.";
         img.addEventListener('click', function (e) {
           e.preventDefault();
           if (hint) hint.style.display = 'none';
-          bubble.textContent = LINES[idx % LINES.length];
-          idx++;
+          if (!introShown) { introShown = true; bubble.textContent = INTRO; }
+          else { bubble.textContent = LINES[idx % LINES.length]; idx++; }
           bubble.classList.add('show');
           clearTimeout(bubbleTimer);
           bubbleTimer = setTimeout(function () { bubble.classList.remove('show'); }, 6200);

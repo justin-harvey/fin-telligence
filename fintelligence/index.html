@@ -114,12 +114,13 @@
           }, true);
 
           // Click Phineas → he talks about the product (and gives you a look).
-          var lineIdx = 0, bubbleTimer;
+          var lineIdx = 0, introShown = false, bubbleTimer;
+          var INTRO = "Hello, I'm Phineas. Hand-drawn, with one porpoise. Fin-Telligence.";
           img.addEventListener('click', function (e) {
             e.preventDefault(); e.stopPropagation();
             if (hint) hint.style.display = 'none';
-            bubble.textContent = LINES[lineIdx % LINES.length];
-            lineIdx++;
+            if (!introShown) { introShown = true; bubble.textContent = INTRO; }
+            else { bubble.textContent = LINES[lineIdx % LINES.length]; lineIdx++; }
             bubble.classList.add('show');
             clearTimeout(bubbleTimer);
             bubbleTimer = setTimeout(function () { bubble.classList.remove('show'); }, 5600);
