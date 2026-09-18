@@ -1,4 +1,4 @@
-# Fin-Telligence
+# Fin-Telligence (https://fin-telligence.netlify.app/enron)
 
 **Financial answers you can audit. The model writes SQL, the database produces the numbers, and every figure in the answer is verified against the data before you see it.**
 
