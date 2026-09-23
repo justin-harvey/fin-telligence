@@ -1,6 +1,6 @@
 # Fin-Telligence — Handoff & Next Steps
 
-_Last updated: 2026-09-15 · `main` @ `21a499c`_
+_Last updated: 2026-09-23 · `main` @ `abeda13`_
 
 **Thesis:** the model writes SQL, the database produces the numbers, every figure
 is verified against the data before you see it, and every answer carries a
@@ -35,9 +35,12 @@ Full detail lives in **`BUILD-PLAN.md`** (untracked, repo root) — the durable 
 
 - **Node 22 required** (`node:sqlite`): `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm use 22` (22.23.2 installed). System node is v18 and will fail.
 - **Model id** is `claude-opus-4-8` everywhere (`claude-opus-5` was a bug).
-- **Pushing:** paste a GitHub PAT inline per session; use it inline in the push URL, don't persist. `git push https://<PAT>@github.com/justin-harvey/fin-telligence.git main`.
+- **Pushing:** paste a GitHub PAT inline per session; use it inline in the push URL, don't persist. `git push https://<PAT>@github.com/justin-harvey/fin-telligence.git main`. **`main` takes out-of-band edits via the GitHub web UI** (e.g. `README.md`), so `git fetch` + rebase before pushing — a straight push can be rejected as non-fast-forward.
 - **Netlify deploy config gotcha (already fixed, don't regress):** the repo is a *pre-built* static site (no `package.json`). `netlify.toml` must use a **no-op build command** (`echo …`) — a UI-set `npm run build` will otherwise override an empty command and fail — and `publish = "fintelligence"`. Asset paths are case-sensitive on Netlify.
 - **The landing page is a compiled Vite/React bundle with NO source in the repo.** `/enron`, `/controls`, and Phineas are standalone HTML / runtime-injected. Rebuilding the frontend from source is its own task (see below).
+- **⚠️ The bundle now carries hand-applied edits that exist in NO source** (`fintelligence/assets/index-diyp9xdl.js`, done via surgical string replacement): the **header nav links** to `/enron` and `/controls`; a **neutralized FT badge** (its `onClick` was removed, so the old "Market Impact" modal is now dead/unreachable code); and **all WisdomAI / "PM application" references stripped** from the "About this prototype" modal. A rebuild from source will silently revert every one of these — replicate them in source or diff against this bundle before shipping. `node --check` the bundle after any hand-edit.
+- **Phineas's spoken content lives in HTML, not the bundle, in two separate copies.** The mascot's `LINES` array (Market-Impact pitch + CPA/audit-market talking points) is in `fintelligence/index.html`; a **second, independent copy of the Phin script** is in `fintelligence/enron.html`. Change "what Phin says" in both, as applicable.
+- **Root-level `enron.html` and `index-diyp9xdl.js` are duplicates of the `fintelligence/` publish-dir copies and are synced by hand.** Only `fintelligence/` deploys (root `netlify.toml` `publish = "fintelligence"`). Edit the `fintelligence/` copy, then `cp` to root so they don't drift. Root `index.html` is a stub, not the deployed page.
 
 ## Verify / resume quickly
 
@@ -99,9 +102,15 @@ seed this). Untrusted convenience — the guard stays the boundary. Natural cons
 of M6's exposed schema resources.
 
 ### 7. Rebuild the landing frontend from source (bigger)
-The SPA is a compiled bundle. With source we could: link `/enron` and `/controls`
-from the landing nav (they're reachable by URL only today), fold the panel in as a
-real route, and make Phineas a component instead of a runtime injection.
+The SPA is a compiled bundle. With source we could: fold the panel in as a real
+route, and make Phineas a component instead of a runtime injection.
+**Before starting, inventory the hand-edits already baked into the current bundle
++ injected HTML** (see "Environment quirks") so the rebuild doesn't regress them:
+the header nav to `/enron` and `/controls` (these are now live in the bundle, not
+URL-only anymore), the removed Market-Impact modal / neutralized FT badge, the
+de-WisdomAI'd About modal, and Phineas's `LINES` (Market-Impact pitch + CPA /
+audit-market talking points, currently in `index.html` and duplicated in
+`enron.html`). Diff the rebuilt output against `abeda13` before shipping.
 
 ### Also parked
 PDF evidence packets server-side (currently Markdown/HTML → browser print, to keep
