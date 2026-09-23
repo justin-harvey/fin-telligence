@@ -406,7 +406,7 @@ node bin/fintel.js <span class="p">enron audit</span>      <span class="c"># ver
           else { bubble.textContent = LINES[idx % LINES.length]; idx++; }
           bubble.classList.add('show');
           clearTimeout(bubbleTimer);
-          bubbleTimer = setTimeout(function () { bubble.classList.remove('show'); }, 6200);
+          bubbleTimer = setTimeout(function () { bubble.classList.remove('show'); }, 8200);
           busy = true; img.src = IMG.menace; img.style.transform = 'scale(1.08)';
           setTimeout(function () { img.src = IMG.phin; img.style.transform = ''; busy = false; }, 1300);
         });

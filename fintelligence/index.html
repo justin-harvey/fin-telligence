@@ -134,7 +134,7 @@
             else { bubble.textContent = LINES[lineIdx % LINES.length]; lineIdx++; }
             bubble.classList.add('show');
             clearTimeout(bubbleTimer);
-            bubbleTimer = setTimeout(function () { bubble.classList.remove('show'); }, 5600);
+            bubbleTimer = setTimeout(function () { bubble.classList.remove('show'); }, 7600);
             busy = true; img.src = IMG.menace; img.style.transform = 'scale(1.1)';
             setTimeout(function () { img.src = IMG.phin; img.style.transform = ''; busy = false; }, 1300);
           });
