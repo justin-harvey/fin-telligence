@@ -31,6 +31,15 @@ import {
     FISCAL_YEAR,
 } from '../src/enron.js';
 import {
+    seedLseg,
+    fundamentalsSnapshot,
+    reconcileGrossProfit,
+    LSEG_LOG_PATH,
+    DEFAULT_RIC,
+    DEFAULT_PERIOD,
+} from '../src/lseg.js';
+import { FakeLsegSession, RealLsegSession, ingestFundamentals } from '../src/lseg-ingest.js';
+import {
     controlResult,
     CONTROL_STATUS,
     generateCompliancePacket,
@@ -390,6 +399,137 @@ async function main() {
             break;
         }
 
+        case 'lseg': {
+            const sub = rest[0];
+            const signer = loadSigner();
+            const usdW = (v) => `$${Number(v).toLocaleString('en-US')}`;
+            // A positional after the subcommand is the RIC; a second is the period.
+            const positional = rest.slice(1).filter((a) => !a.startsWith('--'));
+            const ric = positional[0] || DEFAULT_RIC;
+            const period = positional[1] || DEFAULT_PERIOD;
+            switch (sub) {
+                case 'seed': {
+                    const result = seedLseg();
+                    console.log(
+                        `Seeded LSEG warehouse: ${result.instruments} instruments, ${result.fields} TR.* fields, ` +
+                            `${result.datapoints} datapoints.`,
+                    );
+                    console.log('RICs and field codes are real LSEG identifiers; values are synthetic (validate codes via lseg-mcp).');
+                    break;
+                }
+                case 'fundamentals': {
+                    const { rows, lineage, entry } = fundamentalsSnapshot({ ric, period, signer });
+                    const r = rows[0] ?? {};
+                    console.log(`\n${ric} ${period} — fundamentals snapshot (LSEG TR.* fields)\n`);
+                    console.log(`  Revenue            : ${usdW(r.revenue_usd)}   (TR.Revenue)`);
+                    console.log(`  Cost of revenue    : ${usdW(r.cost_of_revenue_usd)}   (TR.CostOfRevenueTotal)`);
+                    console.log(`  Gross profit       : ${usdW(r.gross_profit_usd)}   (TR.GrossProfit)`);
+                    console.log(`  Operating income   : ${usdW(r.operating_income_usd)}   (TR.OperatingIncome)`);
+                    console.log(`  Net income         : ${usdW(r.net_income_usd)}   (TR.NetIncomeAfterTaxes)`);
+                    console.log(`  Total debt         : ${usdW(r.total_debt_usd)}   (TR.TotalDebtOutstanding)`);
+                    console.log('\nProvenance');
+                    console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
+                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                    console.log('  signature       :', entry.signature ? `signed (key ${entry.signingKeyId})` : 'unsigned');
+                    break;
+                }
+                case 'reconcile': {
+                    const { rows, lineage, entry } = reconcileGrossProfit({ ric, period, signer });
+                    const r = rows[0] ?? {};
+                    const identity = Number(r.identity_gross_usd);
+                    const reported = Number(r.reported_gross_usd);
+                    const variance = identity - reported;
+                    console.log(`\n${ric} ${period} — gross profit reconciliation\n`);
+                    console.log(`  Revenue − Cost of Revenue : ${usdW(identity)}`);
+                    console.log(`  Reported gross (TR.GrossProfit) : ${usdW(reported)}`);
+                    console.log(`  Variance                  : ${usdW(variance)}   ${variance === 0 ? '✓ PASS' : '✗ EXCEPTION'}`);
+                    console.log('\nProvenance');
+                    console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
+                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                    console.log('  compliance tags :', entry.complianceTags.join(' · '));
+                    const packet = exportPath(rest);
+                    if (packet) {
+                        writePacket(packet, {
+                            rows,
+                            entry,
+                            publicKey: signer?.publicKey ?? null,
+                            control: controlResult({
+                                controlId: 'PI1.1',
+                                criterion: 'Processing Integrity — vendor figures reconcile to their component line items',
+                                description: `${ric} ${period} gross profit: Revenue − Cost of Revenue vs reported TR.GrossProfit.`,
+                                status: variance === 0 ? CONTROL_STATUS.PASS : CONTROL_STATUS.EXCEPTION,
+                                figures: [
+                                    { label: 'Gross profit (Revenue − Cost of Revenue)', value: identity, unit: 'usd' },
+                                    { label: 'Gross profit (reported, TR.GrossProfit)', value: reported, unit: 'usd' },
+                                    { label: 'Variance', value: variance, unit: 'usd' },
+                                ],
+                            }),
+                        });
+                    }
+                    break;
+                }
+                case 'ingest': {
+                    const live = rest.includes('--live');
+                    const periodIdx = rest.indexOf('--period');
+                    const ingestPeriod = periodIdx >= 0 ? rest[periodIdx + 1] : 'FY2024';
+                    // RICs are positionals that are neither a flag nor the value after --period.
+                    const universe = [];
+                    for (let i = 1; i < rest.length; i++) {
+                        if (rest[i].startsWith('--')) continue;
+                        if (rest[i - 1] === '--period') continue;
+                        universe.push(rest[i]);
+                    }
+                    if (universe.length === 0) universe.push('IBM.N');
+                    const fields = [
+                        'TR.Revenue', 'TR.CostOfRevenueTotal', 'TR.GrossProfit', 'TR.OperatingIncome',
+                        'TR.NetIncomeAfterTaxes', 'TR.TotalDebtOutstanding', 'TR.TotalAssetsReported',
+                        'TR.PriceClose', 'TR.CompanyMarketCap',
+                    ];
+                    const session = live ? new RealLsegSession() : new FakeLsegSession();
+                    console.log(
+                        `Ingesting ${universe.join(', ')} ${ingestPeriod} via ${live ? 'RealLsegSession (live LSEG Workspace)' : 'FakeLsegSession (synthetic, no entitlement)'}…`,
+                    );
+                    try {
+                        const result = ingestFundamentals({ session, universe, fields, period: ingestPeriod });
+                        console.log(
+                            `Landed ${result.datapoints} datapoints across ${result.instruments} instrument(s). ` +
+                                `Run: fintel lseg reconcile ${universe[0]} ${ingestPeriod}`,
+                        );
+                    } catch (error) {
+                        console.error('Ingest halted:', error.message);
+                        process.exitCode = 1;
+                    }
+                    break;
+                }
+                case 'audit': {
+                    const verifier = signer ? { publicKey: signer.publicKey } : null;
+                    const integrity = verify(LSEG_LOG_PATH, { verifier });
+                    console.log(
+                        `LSEG audit chain: ${integrity.entries} entries — ${integrity.ok ? 'INTACT' : 'BROKEN'}` +
+                            `${verifier ? ' (signatures checked)' : ''}`,
+                    );
+                    if (!integrity.ok) {
+                        console.log(`  broken at entry ${integrity.brokenAt}: ${integrity.reason}`);
+                        process.exitCode = 1;
+                    }
+                    for (const item of readLog(LSEG_LOG_PATH)) {
+                        console.log(`  #${String(item.seq).padStart(3)}  ${item.scenario ?? 'query'}  ${item.question}`);
+                    }
+                    break;
+                }
+                default:
+                    console.log('Usage:');
+                    console.log('  fintel lseg seed                     build the LSEG fundamentals warehouse');
+                    console.log('  fintel lseg fundamentals [RIC] [FY]  attested fundamentals snapshot (default IBM.N FY2023)');
+                    console.log('  fintel lseg reconcile [RIC] [FY]     gross profit = Revenue − Cost of Revenue, attested');
+                    console.log('  fintel lseg ingest [RIC...] [--period FY2024] [--live]   land data via the ingest seam');
+                    console.log('  fintel lseg audit                    verify the LSEG audit chain');
+                    console.log('    add --export <file.json|.md> to reconcile   write a verifiable evidence packet');
+                    process.exitCode = sub ? 2 : 0;
+            }
+            break;
+        }
+
         case 'controls': {
             const sub = rest[0];
             const signer = loadSigner();
@@ -489,6 +629,7 @@ async function main() {
             console.log('  fintel audit --export out.json   write the audit package');
             console.log('  fintel markets <sub>             capital-markets surveillance demo');
             console.log('  fintel enron <sub>               synthetic Enron reporting-gap demo');
+            console.log('  fintel lseg <sub>                LSEG fundamentals warehouse + ingest seam');
             console.log('  fintel controls <sub>            run SOC 2 controls (PASS/EXCEPTION + evidence)');
             console.log('  fintel mcp                       serve the engine over MCP (stdio)');
             console.log('  fintel serve [--port N]          serve the engine over HTTP (for the web proxy)');

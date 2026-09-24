@@ -23,6 +23,7 @@ import { verify } from './audit.js';
 import { reconcileReportedDebt, reconcileReportedRevenue } from './enron.js';
 import { reconcileMrr } from './saas.js';
 import { netPositionAtClose, reconcileNetPosition, MARKETS_LOG_PATH } from './markets.js';
+import { reconcileGrossProfit } from './lseg.js';
 
 /**
  * Shared shape for a reconciliation control: run a query that returns two
@@ -97,6 +98,7 @@ function reconciliation({
 export function controlCatalog() {
     const usdM = (v) => `$${Number(v).toLocaleString('en-US')}m`;
     const usd = (v) => `$${(Number(v) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+    const usd0 = (v) => `$${Number(v).toLocaleString('en-US')}`;
     return [
         {
             id: 'PI1.2-enron-debt-reconciliation',
@@ -175,6 +177,26 @@ export function controlCatalog() {
                     rightLabel: 'Net position (recorded snapshot)',
                     unit: 'shares',
                     fmt: (v) => `${Number(v).toLocaleString('en-US')} sh`,
+                });
+            },
+        },
+        {
+            id: 'PI1.1-lseg-gross-profit-reconciliation',
+            criterion: 'Processing Integrity (PI1.1) — vendor figures reconcile to their component line items',
+            warehouse: 'lseg',
+            description: 'Gross profit computed as Revenue − Cost of Revenue ties out to the reported LSEG TR.GrossProfit.',
+            run(options = {}) {
+                return reconciliation({
+                    controlId: 'PI1.1',
+                    criterion: this.criterion,
+                    description: this.description,
+                    run: reconcileGrossProfit(options),
+                    leftKey: 'identity_gross_usd',
+                    rightKey: 'reported_gross_usd',
+                    leftLabel: 'Gross profit (Revenue − Cost of Revenue)',
+                    rightLabel: 'Gross profit (reported, TR.GrossProfit)',
+                    unit: 'usd',
+                    fmt: usd0,
                 });
             },
         },

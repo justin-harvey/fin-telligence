@@ -27,6 +27,13 @@ import {
     ENRON_ALLOWED_COLUMNS,
     ENRON_REGISTRY,
 } from './enron.js';
+import {
+    LSEG_DB_PATH,
+    LSEG_LOG_PATH,
+    LSEG_ALLOWED_TABLES,
+    LSEG_ALLOWED_COLUMNS,
+    LSEG_REGISTRY,
+} from './lseg.js';
 
 /**
  * @returns {Record<string, {
@@ -69,6 +76,18 @@ export function warehouseDescriptors() {
             allowedColumns: ENRON_ALLOWED_COLUMNS,
             freeText: false,
             metrics: ENRON_REGISTRY.list(),
+        },
+        lseg: {
+            name: 'lseg',
+            description:
+                'LSEG company fundamentals by TR.* field code (instruments, field dictionary, fundamentals). ' +
+                'Real RICs and field codes, synthetic values; snapshot landed via the ingest seam. Canonical queries only.',
+            dbPath: LSEG_DB_PATH,
+            logPath: LSEG_LOG_PATH,
+            allowedTables: LSEG_ALLOWED_TABLES,
+            allowedColumns: LSEG_ALLOWED_COLUMNS,
+            freeText: false,
+            metrics: LSEG_REGISTRY.list(),
         },
     };
 }

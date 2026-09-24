@@ -142,3 +142,48 @@ export function enronRegistry() {
             unit: 'usd_millions',
         });
 }
+
+/**
+ * The registry for the LSEG company-fundamentals warehouse. Each metric is a
+ * field-keyed sum over the long-format `fundamentals` table, so resolving a
+ * concept ("revenue", "gross profit") always sums the one correct LSEG `TR.*`
+ * field the one agreed way. Filtering to a single instrument+period upstream
+ * makes each sum a single datapoint. All monetary metrics are whole USD.
+ *
+ * @returns {MetricRegistry}
+ */
+export function lsegRegistry() {
+    /** @param {string} code @returns {string} */
+    const fieldSum = (code) => `SUM(CASE WHEN field_code = '${code}' THEN value ELSE 0 END)`;
+    return new MetricRegistry()
+        .define('revenue_usd', {
+            description: 'Revenue for the instrument/period, from LSEG field TR.Revenue, in USD.',
+            sql: fieldSum('TR.Revenue'),
+            unit: 'usd',
+        })
+        .define('cost_of_revenue_usd', {
+            description: 'Cost of revenue, total, from LSEG field TR.CostOfRevenueTotal, in USD.',
+            sql: fieldSum('TR.CostOfRevenueTotal'),
+            unit: 'usd',
+        })
+        .define('gross_profit_usd', {
+            description: 'Gross profit as reported, from LSEG field TR.GrossProfit, in USD.',
+            sql: fieldSum('TR.GrossProfit'),
+            unit: 'usd',
+        })
+        .define('operating_income_usd', {
+            description: 'Operating income, from LSEG field TR.OperatingIncome, in USD.',
+            sql: fieldSum('TR.OperatingIncome'),
+            unit: 'usd',
+        })
+        .define('net_income_usd', {
+            description: 'Net income after taxes, from LSEG field TR.NetIncomeAfterTaxes, in USD.',
+            sql: fieldSum('TR.NetIncomeAfterTaxes'),
+            unit: 'usd',
+        })
+        .define('total_debt_usd', {
+            description: 'Total debt outstanding, from LSEG field TR.TotalDebtOutstanding, in USD.',
+            sql: fieldSum('TR.TotalDebtOutstanding'),
+            unit: 'usd',
+        });
+}

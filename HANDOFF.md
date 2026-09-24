@@ -11,7 +11,7 @@ tamper-evident provenance chain. Financial answers you can audit.
 ## Status snapshot
 
 - **Repo:** `justin-harvey/fin-telligence` (public). Clone: `/home/nah/Claudia/fin-telligence`.
-- **Engine:** `fintelligence-core/` — **125 tests, all offline** (Node 22). Green.
+- **Engine:** `fintelligence-core/` — **136 tests, all offline** (Node 22). Green.
 - **Live site:** [fin-telligence.netlify.app](https://fin-telligence.netlify.app/)
   (landing SPA), plus `/enron` (reporting-gap case study) and `/controls` (SOC 2
   evidence panel). Phineas the dolphin mascot on the landing page.
@@ -24,6 +24,7 @@ tamper-evident provenance chain. Financial answers you can audit.
 |---|---|---|
 | M0–M5 | engine: guard, grounding, lineage, signed hash-chained audit, warehouse connector, auth/RLS hook, metric registry, SaaS + capital-markets warehouses | ✅ |
 | — | synthetic **Enron** reporting-gap warehouse (real 10-K anchors, synthetic rows) | ✅ |
+| — | **LSEG** fundamentals warehouse + `lseg-mcp` integration (real RICs/`TR.*` codes, synthetic values, license-gated ingest seam) | ✅ |
 | M6 | **MCP server** — tools + live schema resources over stdio (`fintel mcp`) | ✅ |
 | M8 | **evidence packet** — control-result shape + offline-verifiable packet (intent→SQL→CSV→hash+sig) | ✅ core (UI "verify" tab pending) |
 | M9 | **SOC 2 control catalog** (6 controls) + **evidence panel UX** at `/controls` | ✅ controls + UI; server-side role gating pending on M7 |
@@ -130,3 +131,5 @@ wording (update if the SPA copy changes).
 - `supabase/README.md` — the M7 deploy runbook.
 - `fintelligence-core/README.md` — engine architecture, the four guarantees, layout.
 - `db/enron-anchor.md` — the real Enron 10-K figures + citation (claim discipline).
+- `db/lseg-anchor.md` — LSEG warehouse: real RICs/`TR.*` codes, synthetic values, validate-via-lseg-mcp discipline.
+- `mcp/README.md` — wiring `lseg-mcp` + Fin-Telligence; the resolve→validate→draft→ingest→attest workflow. `src/lseg-ingest.js` is the license-gated seam (`FakeLsegSession` now, `RealLsegSession` = credential swap).

@@ -186,6 +186,38 @@ USD millions, the grain a 10-K prints, so a computed figure grounds against the
 filing verbatim — a deliberate departure from the other warehouses' integer
 cents, documented in `db/enron-schema.sql`.)
 
+## The LSEG fundamentals demo (live vendor data)
+
+The Enron warehouse is a historical case; a fourth warehouse points the same
+machinery at *live vendor market data*. It holds company fundamentals of the kind
+an analyst pulls from **LSEG** (London Stock Exchange Group, formerly Refinitiv)
+by `TR.*` field code through the `lseg-data` library, addressed by real RICs
+(`IBM.N`, `AAPL.O`, `VOD.L`). Fin-Telligence reconciles a reported figure against
+the line items that compose it, with provenance down to the exact LSEG field code.
+
+```bash
+node bin/fintel.js lseg seed                     # instruments, TR.* field dictionary, fundamentals
+node bin/fintel.js lseg fundamentals IBM.N FY2023 # attested snapshot, each concept -> its blessed TR.* field
+node bin/fintel.js lseg reconcile IBM.N FY2023    # Gross Profit = Revenue - Cost of Revenue, attested
+node bin/fintel.js lseg ingest IBM.N --period FY2024   # land data via the ingest seam (synthetic session)
+node bin/fintel.js lseg audit                     # verify the LSEG audit chain
+```
+
+It pairs with the open-source [`lseg-mcp`](https://github.com/GreenGrassBlueOcean/lseg_mcp)
+server, which resolves the correct `TR.*` field for a concept and drafts the
+retrieval call. The division of labour: **lseg-mcp gets the field mapping right;
+Fin-Telligence makes the resulting number auditable.** The join point is the
+ingest seam (`src/lseg-ingest.js`), where an `LsegSession` lands vendor rows into
+the warehouse with provenance. A `FakeLsegSession` runs the whole path with no
+entitlement (the demo); a `RealLsegSession` is the credential-swap seam for a live
+LSEG Workspace. See [`mcp/README.md`](./mcp/README.md) for the end-to-end workflow.
+
+**Real:** the instrument RICs and the `TR.*` field codes are real LSEG
+identifiers (validate codes via lseg-mcp before real ingest). **Synthetic:** every
+value in the `fundamentals` table, authored so the accounting identities hold
+exactly, and labelled synthetic in `db/lseg-anchor.md`. Real identifiers,
+fabricated values, fabrication labelled — the same discipline as the Enron demo.
+
 ## What is real here, and what is not
 
 **Real:** the guard (table *and* column allow-lists, a wall-clock query budget,

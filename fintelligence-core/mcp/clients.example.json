@@ -1,0 +1,14 @@
+{
+  "//": "Example MCP client config (Claude Desktop / Claude Code / Cursor). Registers both servers so one agent can resolve LSEG fields AND run verified, attested queries. Copy the mcpServers block into your client's config; adjust the fin-telligence cwd to your checkout.",
+  "mcpServers": {
+    "lseg-mcp": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/GreenGrassBlueOcean/lseg_mcp.git", "lseg-mcp"]
+    },
+    "fin-telligence": {
+      "command": "node",
+      "args": ["bin/fintel.js", "mcp"],
+      "cwd": "/home/nah/Claudia/fin-telligence/fintelligence-core"
+    }
+  }
+}
