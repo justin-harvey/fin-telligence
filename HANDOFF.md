@@ -140,4 +140,5 @@ wording (update if the SPA copy changes).
 - `fintelligence-core/README.md` — engine architecture, the four guarantees, layout.
 - `db/enron-anchor.md` — the real Enron 10-K figures + citation (claim discipline).
 - `db/lseg-anchor.md` — LSEG warehouse: real RICs/`TR.*` codes, synthetic values, validate-via-lseg-mcp discipline.
+- `LSEG-ARCHITECTURE-REVIEW.md` (repo root) — FDE review of the LSEG business logic: gaps (RIC-as-PK, field params/currency/scale, tautological reconciliation, silent-zero on missing data, no bitemporality, ops, licensing) + redundancies, with a prioritized backlog (P1 NULL-vs-0 and P2 reconcile-single-pass are the quick wins; P3 reframe is most valuable). Start here for LSEG hardening.
 - `mcp/README.md` — wiring `lseg-mcp` + Fin-Telligence; the resolve→validate→draft→ingest→attest workflow. `src/lseg-ingest.js` is the license-gated seam (`FakeLsegSession` now, `RealLsegSession` = credential swap).
