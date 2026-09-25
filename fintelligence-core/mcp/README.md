@@ -24,9 +24,25 @@ auditable. The join point is **ingestion** (see `src/lseg-ingest.js`), not runti
 - **Node ≥ 22** (Fin-Telligence core; `node:sqlite`).
 - **`uv` / `uvx`** for lseg-mcp: `curl -LsSf https://astral.sh/uv/install.sh | sh`
   (Python 3.11+; lseg-mcp's first launch takes 1–3 min to build its indexes).
+- **Pin `mcp<2` when launching lseg-mcp.** It is written for MCP SDK v1; without
+  the pin, uvx resolves `mcp` 2.x and it crashes on startup (`FastMCP` was
+  renamed). The example config already includes `--with mcp<2`.
 - **Only to execute drafted calls against real data:** an LSEG Workspace/Eikon
-  session, the `lseg-data` Python package, and a valid LSEG entitlement. None of
-  this is required to run the demo, which uses synthetic data.
+  session, the `lseg-data` Python package, and a valid LSEG entitlement (app key).
+  None of this is required to run the demo, which uses synthetic data.
+
+## Field validation (done 2026-09-24)
+
+The nine `TR.*` codes this warehouse uses were validated live against lseg-mcp's
+`validate_lseg_formula` — **all nine returned `status: OK`**, with their COA codes
+recorded in `db/lseg-anchor.md`. `validate_lseg_formula` (the mapping matrix) is
+authoritative; the fuzzy `search_data_dictionary` has a smaller sample seed and
+misses some multi-word concepts, so trust validate. Re-run any time:
+
+```bash
+uvx --from git+https://github.com/GreenGrassBlueOcean/lseg_mcp.git --with 'mcp<2' lseg-mcp   # smoke-launch
+node mcp/lseg_probe.mjs validate   # drives validate_lseg_formula + search_data_dictionary
+```
 
 ## Install into an MCP client
 
@@ -45,11 +61,19 @@ into your client config (Claude Desktop, Claude Code, Cursor, VS Code). Set the
    Python for the universe + fields.
 4. **Execute + land** (the entitlement step). Run the drafted call against a live
    LSEG Workspace session and land the result through the ingest seam:
-   - **With an entitlement:** implement `RealLsegSession.getData` in
-     `src/lseg-ingest.js` (it currently throws with instructions), then
-     `ingestFundamentals({ session: new RealLsegSession(...), universe, fields })`.
+   - **With an entitlement:** provide an LSEG app key and run
+     `node bin/fintel.js lseg ingest IBM.N --period FY2023 --live` (reads
+     `$LSEG_APP_KEY`, or pass `--app-key <KEY>`). `RealLsegSession` shells out to
+     `scripts/lseg_fetch.py`, which opens an `lseg-data` session, runs `get_data`,
+     and returns wide rows — no other code changes. Requires `pip install lseg-data`
+     and a running Workspace/entitlement. Point `$LSEG_PYTHON` at the interpreter
+     that has `lseg-data` if it is not the default `python3`.
    - **Without one (demo):** `node bin/fintel.js lseg ingest IBM.N --period FY2024`
      uses the deterministic `FakeLsegSession`. Same code path, synthetic data.
+
+   **The credential is the only thing that changes to go live.** `RealLsegSession`
+   refuses to run without `LSEG_APP_KEY`/`--app-key` rather than returning nothing;
+   `FakeLsegSession` needs no credential. Set the key once and `--live` works.
 5. **Verify + attest.** Fin-Telligence runs over the landed snapshot:
    - `node bin/fintel.js lseg reconcile IBM.N FY2024` — asserts Gross Profit =
      Revenue − Cost of Revenue and hash-chains the result.

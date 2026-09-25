@@ -26,23 +26,33 @@ exact LSEG field code each number came from.
 > verify-or-refuse + attestation over vendor-shaped market data; that only works
 > if the labelling is exact.
 
-## Field codes must be validated through lseg-mcp
+## Field codes validated through lseg-mcp (2026-09-24)
 
-The `TR.*` codes in `lseg_fields` follow LSEG's published field-naming
-conventions and are used here illustratively. **Before any real ingest, resolve
-and validate each code** with the open-source
-[`lseg-mcp`](https://github.com/GreenGrassBlueOcean/lseg_mcp) server, whose entire
-job is getting these right:
+All nine `TR.*` codes below were validated live against the open-source
+[`lseg-mcp`](https://github.com/GreenGrassBlueOcean/lseg_mcp) server's
+`validate_lseg_formula` tool (run against its COA/FCC mapping matrix). **Every one
+returned `status: OK`** — the COA code each maps to is recorded in the field table
+below. lseg-mcp is the tool whose entire job is getting these right:
 
-- `search_data_dictionary` / `search_financial_mapping` — resolve a concept
-  (e.g. "gross profit") to the correct modern `TR.*` field.
-- `validate_lseg_formula` — confirm a drafted field exists and is valid for the
-  instrument's industry (`NOT_FOUND` vs `INDUSTRY_MISMATCH`).
+- `validate_lseg_formula` — confirm a field exists and is valid for the
+  instrument's industry (returns `OK`, `NOT_FOUND`, or an industry mismatch, with
+  the COA/FCC mapping). **This is the authoritative check** and all nine passed.
+- `search_data_dictionary` / `search_financial_mapping` — fuzzy-resolve a concept
+  (e.g. "gross profit") to a `TR.*` field. Note the bundled dictionary's search
+  seed is partial: some multi-word concepts ("cost of revenue", "total assets")
+  return no fuzzy match even though `validate_lseg_formula` confirms the code — so
+  validate is the source of truth, not the fuzzy search.
 - `draft_api_call` — emit the runnable `lseg-data` call to execute against a live
   LSEG Workspace session.
 
-See `mcp/README.md` for wiring lseg-mcp into an MCP client, and
-`src/lseg-ingest.js` for the seam that lands the drafted call's results here.
+Industry scope caveat surfaced by validation: `TR.GrossProfit` (COA `SGRP`) is
+available for Industrial issuers, **not** Bank/Insurance/Utility — so the
+gross-profit identity control only applies to industrials (the seeded RICs are).
+
+Re-validate whenever fields change: `node /tmp/lseg_probe.mjs validate` (see the
+harness in `mcp/README.md`), or wire lseg-mcp into your client per
+`mcp/clients.example.json`. `src/lseg-ingest.js` re-checks every code against the
+warehouse dictionary at ingest time too, refusing unknowns with a pointer here.
 
 ## The identity the reconciliation control is built around
 
@@ -57,19 +67,19 @@ reported `TR.GrossProfit`. PASS when they tie; EXCEPTION with the exact variance
 when a value was altered after the fact — and because every attestation is
 hash-chained, that alteration cannot hide.
 
-## Fields held (all real LSEG `TR.*` codes; validate before ingest)
+## Fields held (all real LSEG `TR.*` codes; validated OK via lseg-mcp 2026-09-24)
 
-| Field code | Concept | Category | Unit |
-|---|---|---|---|
-| `TR.Revenue` | Revenue | Fundamentals | usd |
-| `TR.CostOfRevenueTotal` | Cost of Revenue, Total | Fundamentals | usd |
-| `TR.GrossProfit` | Gross Profit | Fundamentals | usd |
-| `TR.OperatingIncome` | Operating Income | Fundamentals | usd |
-| `TR.NetIncomeAfterTaxes` | Net Income After Taxes | Fundamentals | usd |
-| `TR.TotalDebtOutstanding` | Total Debt Outstanding | Fundamentals | usd |
-| `TR.TotalAssetsReported` | Total Assets, Reported | Fundamentals | usd |
-| `TR.PriceClose` | Price Close | Pricing | usd_cents |
-| `TR.CompanyMarketCap` | Company Market Capitalisation | Valuation | usd |
+| Field code | Concept | Statement / Category | COA | Unit |
+|---|---|---|---|---|
+| `TR.Revenue` | Revenue | Income Statement | `SREV` | usd |
+| `TR.CostOfRevenueTotal` | Cost of Revenue, Total | Income Statement | `SCOR` | usd |
+| `TR.GrossProfit` | Gross Profit | Income Statement | `SGRP` | usd |
+| `TR.OperatingIncome` | Operating Income | Income Statement | `SOPI` | usd |
+| `TR.NetIncomeAfterTaxes` | Net Income After Taxes | Income Statement | `TIAT` | usd |
+| `TR.TotalDebtOutstanding` | Total Debt | Balance Sheet | `STLD` | usd |
+| `TR.TotalAssetsReported` | Total Assets, Reported | Balance Sheet | `ATOT` | usd |
+| `TR.PriceClose` | Closing price (daily) | Pricing (extended dict) | — | usd_cents |
+| `TR.CompanyMarketCap` | Market capitalisation | Reference (extended dict) | — | usd |
 
 Instruments in the seed: `IBM.N` (International Business Machines, NYSE),
 `AAPL.O` (Apple, Nasdaq), `VOD.L` (Vodafone Group, LSE). Reporting period

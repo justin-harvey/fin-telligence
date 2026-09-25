@@ -485,7 +485,9 @@ async function main() {
                         'TR.NetIncomeAfterTaxes', 'TR.TotalDebtOutstanding', 'TR.TotalAssetsReported',
                         'TR.PriceClose', 'TR.CompanyMarketCap',
                     ];
-                    const session = live ? new RealLsegSession() : new FakeLsegSession();
+                    const appKeyIdx = rest.indexOf('--app-key');
+                    const appKey = appKeyIdx >= 0 ? rest[appKeyIdx + 1] : undefined;
+                    const session = live ? new RealLsegSession(appKey ? { appKey } : {}) : new FakeLsegSession();
                     console.log(
                         `Ingesting ${universe.join(', ')} ${ingestPeriod} via ${live ? 'RealLsegSession (live LSEG Workspace)' : 'FakeLsegSession (synthetic, no entitlement)'}…`,
                     );
@@ -522,7 +524,8 @@ async function main() {
                     console.log('  fintel lseg seed                     build the LSEG fundamentals warehouse');
                     console.log('  fintel lseg fundamentals [RIC] [FY]  attested fundamentals snapshot (default IBM.N FY2023)');
                     console.log('  fintel lseg reconcile [RIC] [FY]     gross profit = Revenue − Cost of Revenue, attested');
-                    console.log('  fintel lseg ingest [RIC...] [--period FY2024] [--live]   land data via the ingest seam');
+                    console.log('  fintel lseg ingest [RIC...] [--period FY2024] [--live] [--app-key KEY]   land data via the ingest seam');
+                    console.log('    --live needs an LSEG entitlement: set LSEG_APP_KEY (or pass --app-key) + install lseg-data');
                     console.log('  fintel lseg audit                    verify the LSEG audit chain');
                     console.log('    add --export <file.json|.md> to reconcile   write a verifiable evidence packet');
                     process.exitCode = sub ? 2 : 0;

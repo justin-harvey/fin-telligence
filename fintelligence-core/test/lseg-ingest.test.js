@@ -98,9 +98,15 @@ test('ingest upserts an unseen instrument (a new RIC can be introduced)', () => 
     assert.equal(rows[0].identity_gross_usd, rows[0].reported_gross_usd);
 });
 
-test('the real session stub fails loudly and explains the live path', () => {
-    assert.throws(
-        () => new RealLsegSession().getData(['IBM.N'], ['TR.Revenue']),
-        (error) => /not a live adapter/.test(error.message) && /lseg-data/.test(error.message),
-    );
+test('the real session refuses to run without a credential', () => {
+    const prev = process.env.LSEG_APP_KEY;
+    delete process.env.LSEG_APP_KEY;
+    try {
+        assert.throws(
+            () => new RealLsegSession().getData(['IBM.N'], ['TR.Revenue'], { period: 'FY2024' }),
+            (error) => /LSEG_APP_KEY/.test(error.message),
+        );
+    } finally {
+        if (prev !== undefined) process.env.LSEG_APP_KEY = prev;
+    }
 });

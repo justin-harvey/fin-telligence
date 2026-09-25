@@ -32,7 +32,14 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { LSEG_DB_PATH, LSEG_SCHEMA_PATH, DEFAULT_PERIOD } from './lseg.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+/** The Python bridge RealLsegSession shells out to for real LSEG data. */
+export const LSEG_FETCH_SCRIPT = join(here, '..', 'scripts', 'lseg_fetch.py');
 
 /**
  * The session contract every LSEG data source honours. Documentation-only in
@@ -77,31 +84,72 @@ export class FakeLsegSession {
 }
 
 /**
- * The shape a live LSEG session takes. Not a live adapter — it pins the
- * interface and fails usefully if reached, so the seam is real and documented
- * rather than implied (the same discipline as SnowflakeWarehouse in warehouse.js).
+ * A live LSEG session: fetches real fundamentals through the Python `lseg-data`
+ * library via the `scripts/lseg_fetch.py` bridge, returning the same wide rows
+ * the fake session does. This is the credential-swap seam — with a valid app key
+ * and lseg-data installed, `ingestFundamentals({ session: new RealLsegSession() })`
+ * lands genuine LSEG data and nothing downstream changes.
  *
- * A real implementation would: open an authenticated `lseg-data` session against
- * a running LSEG Workspace/Eikon (a valid entitlement); execute the retrieval
- * call that lseg-mcp's `draft_api_call` produced for the requested fields; and
- * map the returned DataFrame (indexed by Instrument, with a period column from
- * the field parameters) into the wide rows this seam consumes.
+ * The credential (an LSEG Data Platform / Workspace app key entitled for the
+ * requested fields) is read, in order, from the `appKey` option or `$LSEG_APP_KEY`.
+ * Without one it refuses to run rather than silently returning nothing. The exact
+ * `lseg-data` call is confirmed via lseg-mcp (`draft_api_call` /
+ * `get_package_signature`) — see mcp/README.md.
  */
 export class RealLsegSession {
-    /** @param {object} [config] */
-    constructor(config = {}) {
-        this.config = config;
+    /**
+     * @param {object} [config]
+     * @param {string} [config.appKey]      LSEG app key (defaults to $LSEG_APP_KEY)
+     * @param {string} [config.pythonPath]  interpreter for the bridge (defaults to $LSEG_PYTHON or 'python3')
+     * @param {string} [config.scriptPath]  path to lseg_fetch.py
+     * @param {object} [config.parameters]  extra lseg-data field parameters
+     */
+    constructor({
+        appKey = process.env.LSEG_APP_KEY,
+        pythonPath = process.env.LSEG_PYTHON || 'python3',
+        scriptPath = LSEG_FETCH_SCRIPT,
+        parameters = {},
+    } = {}) {
+        this.appKey = appKey;
+        this.pythonPath = pythonPath;
+        this.scriptPath = scriptPath;
+        this.parameters = parameters;
     }
 
-    /** @returns {never} */
-    getData() {
-        throw new Error(
-            'RealLsegSession is an interface shape, not a live adapter. A real implementation opens ' +
-                'an authenticated lseg-data session against a running LSEG Workspace (a valid ' +
-                'entitlement), runs the retrieval call drafted by lseg-mcp (draft_api_call), and maps ' +
-                'the returned DataFrame into wide rows { Instrument, period, [TR.field]: value }. ' +
-                'See mcp/README.md for the lseg-mcp workflow.',
-        );
+    /**
+     * @param {string[]} universe
+     * @param {string[]} fields
+     * @param {{ period?: string }} [options]
+     * @returns {object[]}
+     */
+    getData(universe, fields, { period } = {}) {
+        if (!this.appKey) {
+            throw new Error(
+                'No LSEG credential. Set LSEG_APP_KEY (or pass { appKey }) — a valid LSEG Data Platform / ' +
+                    'Workspace app key entitled for these fields — then re-run. The synthetic FakeLsegSession ' +
+                    'needs no credential; RealLsegSession does. See mcp/README.md.',
+            );
+        }
+        const request = JSON.stringify({ universe, fields, period, appKey: this.appKey, parameters: this.parameters });
+        const res = spawnSync(this.pythonPath, [this.scriptPath], {
+            input: request,
+            encoding: 'utf8',
+            maxBuffer: 64 * 1024 * 1024,
+        });
+        if (res.error) {
+            throw new Error(
+                `Could not run the LSEG Python bridge (${this.pythonPath} ${this.scriptPath}): ${res.error.message}. ` +
+                    'Install Python 3 + lseg-data, or set LSEG_PYTHON to the right interpreter.',
+            );
+        }
+        let out;
+        try {
+            out = JSON.parse(res.stdout || '{}');
+        } catch {
+            throw new Error(`LSEG bridge returned non-JSON output: ${(res.stdout || res.stderr || '').slice(0, 400)}`);
+        }
+        if (out.error) throw new Error(`LSEG fetch failed: ${out.error}`);
+        return out.rows || [];
     }
 }
 

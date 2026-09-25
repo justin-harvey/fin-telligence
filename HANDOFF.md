@@ -24,7 +24,7 @@ tamper-evident provenance chain. Financial answers you can audit.
 |---|---|---|
 | M0–M5 | engine: guard, grounding, lineage, signed hash-chained audit, warehouse connector, auth/RLS hook, metric registry, SaaS + capital-markets warehouses | ✅ |
 | — | synthetic **Enron** reporting-gap warehouse (real 10-K anchors, synthetic rows) | ✅ |
-| — | **LSEG** fundamentals warehouse + `lseg-mcp` integration (real RICs/`TR.*` codes, synthetic values, license-gated ingest seam) | ✅ |
+| — | **LSEG** fundamentals warehouse + `lseg-mcp` integration (real RICs/`TR.*` codes — all 9 validated OK live via lseg-mcp 2026-09-24; synthetic values; `RealLsegSession` + `LSEG_APP_KEY` Python bridge = credential-swap to real data) | ✅ |
 | M6 | **MCP server** — tools + live schema resources over stdio (`fintel mcp`) | ✅ |
 | M8 | **evidence packet** — control-result shape + offline-verifiable packet (intent→SQL→CSV→hash+sig) | ✅ core (UI "verify" tab pending) |
 | M9 | **SOC 2 control catalog** (6 controls) + **evidence panel UX** at `/controls` | ✅ controls + UI; server-side role gating pending on M7 |

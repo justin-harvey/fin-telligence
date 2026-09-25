@@ -200,6 +200,7 @@ node bin/fintel.js lseg seed                     # instruments, TR.* field dicti
 node bin/fintel.js lseg fundamentals IBM.N FY2023 # attested snapshot, each concept -> its blessed TR.* field
 node bin/fintel.js lseg reconcile IBM.N FY2023    # Gross Profit = Revenue - Cost of Revenue, attested
 node bin/fintel.js lseg ingest IBM.N --period FY2024   # land data via the ingest seam (synthetic session)
+node bin/fintel.js lseg ingest IBM.N --period FY2023 --live   # real data — needs LSEG_APP_KEY + lseg-data
 node bin/fintel.js lseg audit                     # verify the LSEG audit chain
 ```
 
