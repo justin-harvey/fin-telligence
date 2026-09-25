@@ -23,7 +23,7 @@ import { verify } from './audit.js';
 import { reconcileReportedDebt, reconcileReportedRevenue } from './enron.js';
 import { reconcileMrr } from './saas.js';
 import { netPositionAtClose, reconcileNetPosition, MARKETS_LOG_PATH } from './markets.js';
-import { reconcileGrossProfit } from './lseg.js';
+import { reconcileGrossProfit, reconcileStandardizedVsAsReported } from './lseg.js';
 
 /**
  * Shared shape for a reconciliation control: run a query that returns two
@@ -41,6 +41,13 @@ import { reconcileGrossProfit } from './lseg.js';
  * @param {string} params.rightLabel
  * @param {string} params.unit
  * @param {(v: number) => string} [params.fmt]  how to render a figure in the exception text
+ * @param {{ label: string, key: string }[]} [params.requiredPresence]  components
+ *   whose presence-count column must be > 0 for the reconciliation to be
+ *   computable; when any is absent the control is N/A, never a false PASS.
+ * @param {{ label: string, key: string }[]} [params.consistencyKeys]  columns
+ *   holding a DISTINCT-value count that must equal 1 (currency, scale,
+ *   periodicity); >1 means the figures are incomparable and the control fails
+ *   loudly rather than subtracting across e.g. currencies (FX guard, finding #2).
  * @returns {{ control: object, entry: object, rows: object[], lineage: object }}
  */
 function reconciliation({
@@ -54,9 +61,60 @@ function reconciliation({
     rightLabel,
     unit,
     fmt = (v) => String(v),
+    requiredPresence = null,
+    consistencyKeys = null,
 }) {
     const { rows, entry, lineage } = run;
     const r = rows[0] ?? {};
+
+    // Coverage gate. A missing component surfaces as an explicit presence count
+    // of 0, or as a NULL figure (a field-keyed sum over an absent row is NULL,
+    // not 0). Either way the identity is not computable, so the honest result is
+    // N/A — reporting PASS on a `0 − 0 = 0` that only means "we have no data"
+    // would be a false assurance, the dangerous failure mode for regulated use.
+    const missing = (requiredPresence ?? []).filter(({ key }) => !Number(r[key])).map(({ label }) => label);
+    const figureAbsent = r[leftKey] == null || r[rightKey] == null;
+    if (missing.length > 0 || figureAbsent) {
+        const detail = missing.length > 0
+            ? `required component(s) absent: ${missing.join(', ')}`
+            : 'a required figure is absent for this instrument/period';
+        const control = controlResult({
+            controlId,
+            criterion,
+            description,
+            status: CONTROL_STATUS.NA,
+            figures: [
+                { label: leftLabel, value: r[leftKey] ?? null, unit },
+                { label: rightLabel, value: r[rightKey] ?? null, unit },
+                { label: 'Coverage', value: `N/A — ${detail}` },
+            ],
+        });
+        return { control, entry, rows, lineage };
+    }
+
+    // FX / basis gate. Subtracting or comparing figures is only valid when they
+    // share a currency, scale and periodicity. A mix is not a variance to measure
+    // — it is incomparable data, so fail loudly rather than return a bogus number
+    // (the silent-wrong-answer-on-multi-currency-data failure mode, finding #2).
+    const mixed = (consistencyKeys ?? []).filter(({ key }) => Number(r[key]) > 1).map(({ label }) => label);
+    if (mixed.length > 0) {
+        const control = controlResult({
+            controlId,
+            criterion,
+            description,
+            status: CONTROL_STATUS.EXCEPTION,
+            exception:
+                `cannot reconcile across mixed ${mixed.join(', ')} — figures must share currency, scale and ` +
+                'periodicity; normalise (e.g. convert to one currency at one FX basis) before reconciling',
+            figures: [
+                { label: leftLabel, value: r[leftKey] ?? null, unit },
+                { label: rightLabel, value: r[rightKey] ?? null, unit },
+                { label: 'Basis', value: `mixed ${mixed.join(', ')}` },
+            ],
+        });
+        return { control, entry, rows, lineage };
+    }
+
     const left = Number(r[leftKey]);
     const right = Number(r[rightKey]);
     const variance = left - right;
@@ -182,9 +240,12 @@ export function controlCatalog() {
         },
         {
             id: 'PI1.1-lseg-gross-profit-reconciliation',
-            criterion: 'Processing Integrity (PI1.1) — vendor figures reconcile to their component line items',
+            criterion: 'Processing Integrity (PI1.1) — the standardized model is internally consistent and untampered',
             warehouse: 'lseg',
-            description: 'Gross profit computed as Revenue − Cost of Revenue ties out to the reported LSEG TR.GrossProfit.',
+            description:
+                'On LSEG\'s standardized basis Gross Profit is defined as Revenue − Cost of Revenue, so this identity ' +
+                'holds by construction on clean vendor data; the control is a pipeline-integrity check that fails on ' +
+                'ingest corruption or a value altered after landing.',
             run(options = {}) {
                 return reconciliation({
                     controlId: 'PI1.1',
@@ -197,6 +258,47 @@ export function controlCatalog() {
                     rightLabel: 'Gross profit (reported, TR.GrossProfit)',
                     unit: 'usd',
                     fmt: usd0,
+                    requiredPresence: [
+                        { label: 'Revenue', key: 'revenue_present' },
+                        { label: 'Cost of Revenue', key: 'cost_present' },
+                        { label: 'reported Gross Profit', key: 'gross_present' },
+                    ],
+                    consistencyKeys: [
+                        { label: 'currency', key: 'currency_variants' },
+                        { label: 'scale', key: 'scale_variants' },
+                        { label: 'periodicity', key: 'periodicity_variants' },
+                    ],
+                });
+            },
+        },
+        {
+            id: 'PI1.1-lseg-standardized-vs-as-reported',
+            criterion: 'Processing Integrity (PI1.1) — the vendor-standardized figure reconciles to the company\'s own filing',
+            warehouse: 'lseg',
+            description:
+                'LSEG standardized (COA) gross profit ties out to as-reported gross profit; a variance is a real ' +
+                'classification difference (LSEG normalisation vs the filing) to investigate, not a data error.',
+            run(options = {}) {
+                return reconciliation({
+                    controlId: 'PI1.1',
+                    criterion: this.criterion,
+                    description: this.description,
+                    run: reconcileStandardizedVsAsReported(options),
+                    leftKey: 'standardized_gross_usd',
+                    rightKey: 'as_reported_gross_usd',
+                    leftLabel: 'Gross profit (standardized, COA)',
+                    rightLabel: 'Gross profit (as reported)',
+                    unit: 'usd',
+                    fmt: usd0,
+                    requiredPresence: [
+                        { label: 'standardized Gross Profit', key: 'standardized_present' },
+                        { label: 'as-reported Gross Profit', key: 'as_reported_present' },
+                    ],
+                    consistencyKeys: [
+                        { label: 'currency', key: 'currency_variants' },
+                        { label: 'scale', key: 'scale_variants' },
+                        { label: 'periodicity', key: 'periodicity_variants' },
+                    ],
                 });
             },
         },

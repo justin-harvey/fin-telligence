@@ -150,11 +150,19 @@ export function enronRegistry() {
  * field the one agreed way. Filtering to a single instrument+period upstream
  * makes each sum a single datapoint. All monetary metrics are whole USD.
  *
+ * Absent field → NULL, never 0. The CASE has no `ELSE 0`: when the field's row
+ * is missing (an LSEG `<NA>`, an unentitled field, a coverage gap) every branch
+ * is NULL and SQLite's `SUM` over all-NULL rows is NULL. Folding absence into 0
+ * would turn "we have no Revenue row" into "Revenue = 0", and a reconciliation
+ * would then read `0 − 0 = 0` as a PASS — a false pass on missing data, the
+ * dangerous failure mode for regulated use. Callers distinguish the NULL and
+ * report N/A instead (see reconcileGrossProfit + the reconciliation control).
+ *
  * @returns {MetricRegistry}
  */
 export function lsegRegistry() {
     /** @param {string} code @returns {string} */
-    const fieldSum = (code) => `SUM(CASE WHEN field_code = '${code}' THEN value ELSE 0 END)`;
+    const fieldSum = (code) => `SUM(CASE WHEN field_code = '${code}' THEN value END)`;
     return new MetricRegistry()
         .define('revenue_usd', {
             description: 'Revenue for the instrument/period, from LSEG field TR.Revenue, in USD.',

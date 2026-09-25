@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { seedEnron } from '../src/enron.js';
 import { seedMarkets } from '../src/markets.js';
+import { seedLseg } from '../src/lseg.js';
 import { seed as seedSaas } from '../src/db.js';
 import { readLog } from '../src/audit.js';
 import { controlCatalog, getControl } from '../src/controls.js';
@@ -120,6 +121,72 @@ test('the markets position reconciliation PASSES: derived ties to the recorded s
     const { control, rows } = getControl('PI1.2-markets-position-reconciliation').run({ dbPath: db, logPath: freshLog() });
     assert.equal(control.status, CONTROL_STATUS.PASS);
     assert.equal(rows[0].derived_net_qty, rows[0].snapshot_net_qty);
+});
+
+test('the LSEG gross-profit reconciliation PASSES on complete data', () => {
+    const db = join(mkdtempSync(join(tmpdir(), 'fintel-ctl-lseg-')), 'lseg.db');
+    seedLseg(db);
+    const { control, rows } = getControl('PI1.1-lseg-gross-profit-reconciliation').run({ dbPath: db, logPath: freshLog() });
+    assert.equal(control.status, CONTROL_STATUS.PASS);
+    assert.equal(rows[0].identity_gross_usd, rows[0].reported_gross_usd);
+    assert.equal(rows[0].revenue_present, 1);
+});
+
+test('the LSEG reconciliation is N/A (not a false PASS) when a required component is absent', () => {
+    const db = join(mkdtempSync(join(tmpdir(), 'fintel-ctl-lsegna-')), 'lseg.db');
+    seedLseg(db);
+
+    // A coverage gap: the Revenue row for IBM.N FY2023 is missing (LSEG <NA>,
+    // unentitled, or simply not delivered). A field-keyed sum over the absent
+    // row is NULL, so `NULL − cost = NULL` — the identity is not computable.
+    const w = new DatabaseSync(db);
+    // Fundamentals key on Org PermID now (IBM = 4295904307), not RIC.
+    w.exec("DELETE FROM fundamentals WHERE org_permid = '4295904307' AND period = 'FY2023' AND field_code = 'TR.Revenue'");
+    w.close();
+
+    const { control, rows } = getControl('PI1.1-lseg-gross-profit-reconciliation').run({ dbPath: db, logPath: freshLog() });
+
+    // The dangerous failure mode would be PASS on a 0 that only means "no data".
+    assert.notEqual(control.status, CONTROL_STATUS.PASS);
+    assert.equal(control.status, CONTROL_STATUS.NA);
+    assert.equal(rows[0].revenue_present, 0);
+    assert.equal(rows[0].identity_gross_usd, null);
+    const coverage = control.figures.find((f) => f.label === 'Coverage');
+    assert.match(coverage.value, /Revenue/);
+});
+
+test('the LSEG reconciliation refuses to reconcile across mixed currencies (FX guard)', () => {
+    const db = join(mkdtempSync(join(tmpdir(), 'fintel-ctl-fx-')), 'lseg.db');
+    seedLseg(db);
+    // IBM (4295904307): Cost of Revenue comes back in GBP while Revenue is USD.
+    const w = new DatabaseSync(db);
+    w.exec("UPDATE fundamentals SET currency = 'GBP' WHERE org_permid = '4295904307' AND period = 'FY2023' AND field_code = 'TR.CostOfRevenueTotal'");
+    w.close();
+    const { control } = getControl('PI1.1-lseg-gross-profit-reconciliation').run({ ric: 'IBM.N', period: 'FY2023', dbPath: db, logPath: freshLog() });
+    // Not a false PASS on a bogus cross-currency subtraction, and not a numeric
+    // variance either — an explicit refusal to reconcile incomparable figures.
+    assert.equal(control.status, CONTROL_STATUS.EXCEPTION);
+    assert.match(control.exception, /mixed currency/);
+    assert.match(control.exception, /normalise/);
+});
+
+test('the standardized-vs-as-reported control PASSES when LSEG agrees with the filing', () => {
+    const db = join(mkdtempSync(join(tmpdir(), 'fintel-ctl-basis-')), 'lseg.db');
+    seedLseg(db);
+    const { control, rows } = getControl('PI1.1-lseg-standardized-vs-as-reported').run({ ric: 'IBM.N', period: 'FY2023', dbPath: db, logPath: freshLog() });
+    assert.equal(control.status, CONTROL_STATUS.PASS);
+    assert.equal(rows[0].standardized_gross_usd, rows[0].as_reported_gross_usd);
+});
+
+test('the standardized-vs-as-reported control raises an EXCEPTION on a classification difference', () => {
+    const db = join(mkdtempSync(join(tmpdir(), 'fintel-ctl-basisx-')), 'lseg.db');
+    seedLseg(db);
+    // IBM.N FY2022 carries a modelled $500m reclassification between the two bases.
+    const { control } = getControl('PI1.1-lseg-standardized-vs-as-reported').run({ ric: 'IBM.N', period: 'FY2022', dbPath: db, logPath: freshLog() });
+    assert.equal(control.status, CONTROL_STATUS.EXCEPTION);
+    assert.match(control.exception, /does not tie to/);
+    const variance = control.figures.find((f) => f.label === 'Variance');
+    assert.equal(variance.value, -500_000_000);
 });
 
 test('the reproducibility control PASSES: two runs share a result hash', () => {

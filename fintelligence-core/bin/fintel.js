@@ -34,6 +34,7 @@ import {
     seedLseg,
     fundamentalsSnapshot,
     reconcileGrossProfit,
+    reconcileStandardizedVsAsReported,
     LSEG_LOG_PATH,
     DEFAULT_RIC,
     DEFAULT_PERIOD,
@@ -411,7 +412,8 @@ async function main() {
                 case 'seed': {
                     const result = seedLseg();
                     console.log(
-                        `Seeded LSEG warehouse: ${result.instruments} instruments, ${result.fields} TR.* fields, ` +
+                        `Seeded LSEG warehouse: ${result.organizations} organizations (Org PermID), ` +
+                            `${result.instruments} instruments (RIC aliases), ${result.fields} TR.* fields, ` +
                             `${result.datapoints} datapoints.`,
                     );
                     console.log('RICs and field codes are real LSEG identifiers; values are synthetic (validate codes via lseg-mcp).');
@@ -436,19 +438,71 @@ async function main() {
                 case 'reconcile': {
                     const { rows, lineage, entry } = reconcileGrossProfit({ ric, period, signer });
                     const r = rows[0] ?? {};
+                    // Coverage first: an absent component (presence 0, or a NULL
+                    // field-keyed sum) is not computable — report N/A, never a
+                    // false PASS on a 0 that only means "we have no data".
+                    const absent = [
+                        ['Revenue', r.revenue_present],
+                        ['Cost of Revenue', r.cost_present],
+                        ['reported Gross Profit', r.gross_present],
+                    ].filter(([, count]) => !Number(count)).map(([label]) => label);
+                    // FX / basis gate: components must share currency, scale and
+                    // periodicity or the subtraction is meaningless.
+                    const mixed = [
+                        ['currency', r.currency_variants],
+                        ['scale', r.scale_variants],
+                        ['periodicity', r.periodicity_variants],
+                    ].filter(([, n]) => Number(n) > 1).map(([label]) => label);
                     const identity = Number(r.identity_gross_usd);
                     const reported = Number(r.reported_gross_usd);
                     const variance = identity - reported;
+                    const isNA = absent.length > 0 || r.identity_gross_usd == null || r.reported_gross_usd == null;
+                    const isMixed = !isNA && mixed.length > 0;
+                    const status = isNA
+                        ? CONTROL_STATUS.NA
+                        : isMixed || variance !== 0
+                            ? CONTROL_STATUS.EXCEPTION
+                            : CONTROL_STATUS.PASS;
                     console.log(`\n${ric} ${period} — gross profit reconciliation\n`);
-                    console.log(`  Revenue − Cost of Revenue : ${usdW(identity)}`);
-                    console.log(`  Reported gross (TR.GrossProfit) : ${usdW(reported)}`);
-                    console.log(`  Variance                  : ${usdW(variance)}   ${variance === 0 ? '✓ PASS' : '✗ EXCEPTION'}`);
+                    if (isNA) {
+                        const detail = absent.length > 0 ? `absent: ${absent.join(', ')}` : 'a required figure is absent';
+                        console.log(`  Coverage                  : ⚠ N/A   (${detail})`);
+                    } else if (isMixed) {
+                        console.log(`  Basis                     : ✗ EXCEPTION   cannot reconcile across mixed ${mixed.join(', ')} (normalise first)`);
+                    } else {
+                        console.log(`  Revenue − Cost of Revenue : ${usdW(identity)}   (${r.currency})`);
+                        console.log(`  Reported gross (TR.GrossProfit) : ${usdW(reported)}`);
+                        console.log(`  Variance                  : ${usdW(variance)}   ${variance === 0 ? '✓ PASS' : '✗ EXCEPTION'}`);
+                    }
                     console.log('\nProvenance');
                     console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
                     console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
                     console.log('  compliance tags :', entry.complianceTags.join(' · '));
                     const packet = exportPath(rest);
                     if (packet) {
+                        let figures;
+                        let exception = null;
+                        if (isNA) {
+                            figures = [
+                                { label: 'Gross profit (Revenue − Cost of Revenue)', value: r.identity_gross_usd ?? null, unit: 'usd' },
+                                { label: 'Gross profit (reported, TR.GrossProfit)', value: r.reported_gross_usd ?? null, unit: 'usd' },
+                                { label: 'Coverage', value: `N/A — ${absent.length > 0 ? `absent: ${absent.join(', ')}` : 'a required figure is absent'}` },
+                            ];
+                        } else if (isMixed) {
+                            exception = `cannot reconcile across mixed ${mixed.join(', ')} — normalise to one currency/scale/periodicity first`;
+                            figures = [
+                                { label: 'Gross profit (Revenue − Cost of Revenue)', value: identity, unit: 'usd' },
+                                { label: 'Gross profit (reported, TR.GrossProfit)', value: reported, unit: 'usd' },
+                                { label: 'Basis', value: `mixed ${mixed.join(', ')}` },
+                            ];
+                        } else {
+                            if (variance !== 0) exception = `computed gross (${usdW(identity)}) does not tie to reported (${usdW(reported)}); variance ${usdW(variance)}`;
+                            figures = [
+                                { label: 'Gross profit (Revenue − Cost of Revenue)', value: identity, unit: 'usd' },
+                                { label: 'Gross profit (reported, TR.GrossProfit)', value: reported, unit: 'usd' },
+                                { label: 'Variance', value: variance, unit: 'usd' },
+                            ];
+                        }
                         writePacket(packet, {
                             rows,
                             entry,
@@ -457,15 +511,55 @@ async function main() {
                                 controlId: 'PI1.1',
                                 criterion: 'Processing Integrity — vendor figures reconcile to their component line items',
                                 description: `${ric} ${period} gross profit: Revenue − Cost of Revenue vs reported TR.GrossProfit.`,
-                                status: variance === 0 ? CONTROL_STATUS.PASS : CONTROL_STATUS.EXCEPTION,
-                                figures: [
-                                    { label: 'Gross profit (Revenue − Cost of Revenue)', value: identity, unit: 'usd' },
-                                    { label: 'Gross profit (reported, TR.GrossProfit)', value: reported, unit: 'usd' },
-                                    { label: 'Variance', value: variance, unit: 'usd' },
-                                ],
+                                status,
+                                exception,
+                                figures,
                             }),
                         });
                     }
+                    break;
+                }
+                case 'basis': {
+                    const { rows, lineage, entry } = reconcileStandardizedVsAsReported({ ric, period, signer });
+                    const r = rows[0] ?? {};
+                    // Coverage first, same discipline as reconcile: an absent
+                    // basis is N/A, never a false tie to zero.
+                    const absent = [
+                        ['standardized', r.standardized_present],
+                        ['as-reported', r.as_reported_present],
+                    ].filter(([, count]) => !Number(count)).map(([label]) => label);
+                    const mixed = [
+                        ['currency', r.currency_variants],
+                        ['scale', r.scale_variants],
+                        ['periodicity', r.periodicity_variants],
+                    ].filter(([, n]) => Number(n) > 1).map(([label]) => label);
+                    const standardized = Number(r.standardized_gross_usd);
+                    const asReported = Number(r.as_reported_gross_usd);
+                    const variance = standardized - asReported;
+                    const isNA = absent.length > 0 || r.standardized_gross_usd == null || r.as_reported_gross_usd == null;
+                    const isMixed = !isNA && mixed.length > 0;
+                    const status = isNA
+                        ? CONTROL_STATUS.NA
+                        : isMixed || variance !== 0
+                            ? CONTROL_STATUS.EXCEPTION
+                            : CONTROL_STATUS.PASS;
+                    console.log(`\n${ric} ${period} — gross profit: standardized (COA) vs as-reported\n`);
+                    if (isNA) {
+                        console.log(`  Coverage                  : ⚠ N/A   (absent: ${absent.join(', ')})`);
+                    } else if (isMixed) {
+                        console.log(`  Basis                     : ✗ EXCEPTION   cannot compare across mixed ${mixed.join(', ')} (normalise first)`);
+                    } else {
+                        console.log(`  Standardized (COA)        : ${usdW(standardized)}   (${r.currency})`);
+                        console.log(`  As reported (filing)      : ${usdW(asReported)}`);
+                        const verdict = variance === 0
+                            ? '✓ PASS (LSEG agrees with the filing)'
+                            : '✗ EXCEPTION (classification difference to investigate)';
+                        console.log(`  Variance                  : ${usdW(variance)}   ${verdict}`);
+                    }
+                    console.log('\nProvenance');
+                    console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
+                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                    console.log('  compliance tags :', entry.complianceTags.join(' · '));
                     break;
                 }
                 case 'ingest': {
@@ -523,7 +617,8 @@ async function main() {
                     console.log('Usage:');
                     console.log('  fintel lseg seed                     build the LSEG fundamentals warehouse');
                     console.log('  fintel lseg fundamentals [RIC] [FY]  attested fundamentals snapshot (default IBM.N FY2023)');
-                    console.log('  fintel lseg reconcile [RIC] [FY]     gross profit = Revenue − Cost of Revenue, attested');
+                    console.log('  fintel lseg reconcile [RIC] [FY]     gross profit = Revenue − Cost of Revenue, attested (standardized integrity)');
+                    console.log('  fintel lseg basis [RIC] [FY]         standardized (COA) gross profit vs as-reported, attested');
                     console.log('  fintel lseg ingest [RIC...] [--period FY2024] [--live] [--app-key KEY]   land data via the ingest seam');
                     console.log('    --live needs an LSEG entitlement: set LSEG_APP_KEY (or pass --app-key) + install lseg-data');
                     console.log('  fintel lseg audit                    verify the LSEG audit chain');

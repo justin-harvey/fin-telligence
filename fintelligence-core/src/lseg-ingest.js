@@ -35,7 +35,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LSEG_DB_PATH, LSEG_SCHEMA_PATH, DEFAULT_PERIOD } from './lseg.js';
+import { LSEG_DB_PATH, LSEG_SCHEMA_PATH, DEFAULT_PERIOD, periodicityOf } from './lseg.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** The Python bridge RealLsegSession shells out to for real LSEG data. */
@@ -233,12 +233,17 @@ export function ingestFundamentals({
             }
         }
 
+        // Fundamentals key on the stable Org PermID, so a RIC must resolve to its
+        // organization before anything lands (finding #1). These maps are the
+        // ric → (org_permid, currency) resolution the seeded warehouse provides.
+        const orgOf = new Map(db.prepare('SELECT ric, org_permid FROM instruments').all().map((r) => [r.ric, r.org_permid]));
         const currencyOf = new Map(db.prepare('SELECT ric, currency FROM instruments').all().map((r) => [r.ric, r.currency]));
+        const insertOrg = db.prepare('INSERT OR IGNORE INTO organizations (org_permid, name, sector) VALUES (?, ?, NULL)');
         const upsertInstrument = db.prepare(
-            "INSERT OR IGNORE INTO instruments (ric, name, isin, exchange, currency, sector) VALUES (?, ?, NULL, '', 'USD', NULL)",
+            "INSERT OR IGNORE INTO instruments (ric, org_permid, isin, exchange, currency) VALUES (?, ?, NULL, '', 'USD')",
         );
         const insertFact = db.prepare(
-            'INSERT INTO fundamentals (ric, field_code, period, value, currency, retrieved_at, source) VALUES (?,?,?,?,?,?,?)',
+            'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, scale, periodicity, reporting_state, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?,?,?)',
         );
 
         const seenInstruments = new Set();
@@ -246,16 +251,27 @@ export function ingestFundamentals({
         for (const row of wideRows) {
             const ric = row.Instrument;
             if (!ric) continue;
-            if (!currencyOf.has(ric)) {
-                upsertInstrument.run(ric, ric); // minimal placeholder; enrich the dictionary later
+            if (!orgOf.has(ric)) {
+                // Unknown RIC: real LSEG data carries the Org PermID (e.g. via
+                // TR.OrganizationID); the synthetic seam does not, so mint a
+                // clearly-marked placeholder organization to enrich later, and
+                // alias the new RIC onto it.
+                const placeholderOrg = `PENDING:${ric}`;
+                insertOrg.run(placeholderOrg, ric);
+                upsertInstrument.run(ric, placeholderOrg);
+                orgOf.set(ric, placeholderOrg);
                 currencyOf.set(ric, 'USD');
             }
             seenInstruments.add(ric);
+            const orgPermid = orgOf.get(ric);
             const p = row.period ?? period;
+            // Synthetic seam: values arrive raw (scale 0) as last reported.
+            // Periodicity is read off the period; real data carries Scale/Curn/
+            // ReportingState from the request, to be threaded through here.
             for (const field of fields) {
                 const value = row[field];
                 if (value == null) continue;
-                insertFact.run(ric, field, p, value, currencyOf.get(ric), retrievedAt, source);
+                insertFact.run(orgPermid, field, p, value, currencyOf.get(ric), 0, periodicityOf(p), 'reported', retrievedAt, source);
                 datapoints += 1;
             }
         }

@@ -5,7 +5,7 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fin-Telligence — LSEG Fundamentals, Audited</title>
-    <meta name="description" content="LSEG company fundamentals addressed by real TR.* field codes — reconciled to their component line items, grounded, hashed, and tamper-evident. Paired with the open-source lseg-mcp." />
+    <meta name="description" content="LSEG company fundamentals addressed by real TR.* field codes — reconciled (standardized-model integrity and standardized-vs-as-reported), hash-chained, and tamper-evident. Paired with the open-source lseg-mcp." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -231,7 +231,7 @@
             <p class="lede">
               LSEG (London Stock Exchange Group, formerly Refinitiv) company fundamentals, addressed by
               real <span class="ptip" tabindex="0" data-ptip="TR.* codes are LSEG's field names: TR.Revenue is revenue, TR.GrossProfit is gross profit. lseg-mcp resolves the right one and I cite it on every value."><code>TR.*</code> field codes</span>
-              over real <span class="ptip" tabindex="0" data-ptip="A RIC (Reuters Instrument Code) is LSEG's ID for a security. IBM.N is IBM on the NYSE. It's how I know exactly which instrument a number belongs to.">RICs</span>.
+              over real <span class="ptip" tabindex="0" data-ptip="A RIC (Reuters Instrument Code) identifies a quote — an instrument at a venue. IBM.N is IBM on the NYSE. A RIC can be reassigned, so I treat it as an alias and resolve it to the stable Org PermID the fundamentals actually key on.">RICs</span>.
               Fin-Telligence reconciles a reported figure to the line items that compose it and
               hash-chains the result, with provenance down to the exact LSEG field. It pairs with the
               open-source <span class="ptip" tabindex="0" data-ptip="The open-source server that resolves and validates LSEG field codes and drafts the retrieval call. It never returns market data, it just gets the mapping right. I make the number auditable."><b>lseg-mcp</b></span>:
@@ -263,9 +263,11 @@
             <h3>Fin-Telligence &mdash; verifies &amp; attests</h3>
             <p class="sub">The audit layer.</p>
             <div class="gap" style="background:none;border:0;padding:0;margin:0">
-              Runs the landed snapshot through <b>guard &rarr; grounding &rarr; hash-chained audit</b>,
-              reconciles a reported figure against the components that should compose it, and
-              <b>refuses</b> on any mismatch. The join point is ingestion, not runtime.
+              Runs the landed snapshot through <b>guard &rarr; canonical reconciliation &rarr; hash-chained
+              audit</b>. The queries are canonical (no model narrates a number), so the guarantee here is a
+              <b>reconciliation control</b> that ties figures out and a <b>tamper-evident chain</b> &mdash; a
+              variance raises an <b>EXCEPTION</b>, and an edit to a past attestation breaks the chain. The
+              join point is ingestion, not runtime.
             </div>
           </div>
         </div>
@@ -275,8 +277,8 @@
         <h2>The reconciliation</h2>
         <div class="cards">
           <div class="card">
-            <h3>Gross profit ties to its components</h3>
-            <p class="sub">IBM.N &middot; FY2023 &middot; the identity a control asserts.</p>
+            <h3>Two reconciliations, one attested chain</h3>
+            <p class="sub">IBM.N &middot; FY2023 &middot; an integrity check and a data check.</p>
             <div class="figrow">
               <span class="label">Revenue <span class="tag real">TR.Revenue</span></span>
               <span class="val reported">$61,860m</span>
@@ -294,27 +296,38 @@
               <span class="val net">$33,914m</span>
             </div>
             <div class="gap">
-              <b>PASS.</b> The identity <b>Gross Profit = Revenue &minus; Cost of Revenue</b> ties out
-              exactly. Alter any component and the control raises an <b>EXCEPTION</b> with the precise
-              variance &mdash; and the hash chain catches the edit.
+              <b>Integrity check.</b> On LSEG's <b>standardized</b> (COA) model, Gross Profit is <em>defined
+              as</em> Revenue &minus; Cost of Revenue, so this identity holds by construction on clean vendor
+              data &mdash; a <b>PASS</b> here means the pipeline is intact. Alter any component after landing and
+              the control raises an <b>EXCEPTION</b> with the precise variance, and the hash chain catches the edit.
+            </div>
+            <div class="gap" style="margin-top:10px">
+              <b>Data check.</b> The reconciliation that tests LSEG's <em>numbers</em> is
+              <b>standardized (COA) vs as-reported</b>: LSEG normalises every issuer to a common chart of
+              accounts, and where that reclassifies a line item across the gross-profit boundary the two
+              bases diverge. A tie means LSEG agrees with the filing; a variance is a real
+              <b>classification difference</b> to investigate before citing a figure &mdash; not a data error,
+              and surfaced, not hidden.
             </div>
           </div>
           <div class="card">
             <h3>Provenance to the field code</h3>
             <p class="sub">Every value cites where it came from.</p>
             <div class="gap" style="background:none;border:0;padding:0;margin:0 0 12px">
-              Data is stored long-format &mdash; one row per (instrument, field, period) &mdash; carrying
-              the <code class="inl">TR.*</code> code, the retrieval date, and the source feed. A figure in an
-              answer resolves to its blessed LSEG field the one agreed way, so &ldquo;where did this number
-              come from?&rdquo; has an exact, verifiable answer.
+              Data is stored long-format &mdash; one row per (organization, field, period, basis) &mdash;
+              carrying the <code class="inl">TR.*</code> code, the retrieval date, and the source feed.
+              Fundamentals are <b>entity-level</b>, so they key on the stable
+              <span class="ptip" tabindex="0" data-ptip="LSEG's permanent entity identifier (permid.org). It survives ticker renames, exchange moves and M&A — unlike a RIC, which is a quote id (instrument × venue) and can be reassigned. So fundamentals key on the Org PermID; the RIC is a lookup alias.">Org PermID</span>,
+              not on the mutable RIC. A figure resolves to its blessed LSEG field the one agreed way, so
+              &ldquo;where did this number come from?&rdquo; has an exact, verifiable answer.
             </div>
             <div class="figrow">
               <span class="label">Grain</span>
-              <span class="label" style="color:#c7cede">instrument × field × period</span>
+              <span class="label" style="color:#c7cede">org (PermID) × field × period × basis</span>
             </div>
             <div class="figrow">
-              <span class="label">Instruments</span>
-              <span class="label" style="color:#c7cede">IBM.N · AAPL.O · VOD.L</span>
+              <span class="label">Organizations</span>
+              <span class="label" style="color:#c7cede">IBM · Apple · Vodafone (RIC alias → Org PermID)</span>
             </div>
           </div>
         </div>
@@ -406,7 +419,7 @@
           <span class="step" tabindex="0" data-ptip="A plain-English question about a company's fundamentals. Hover me for the rest of the pipeline.">question</span><span class="arw">&rarr;</span>
           <span class="step" tabindex="0" data-ptip="guard.js parses the SQL before it runs: SELECT only, allow-listed tables and columns, a forced LIMIT. Anything outside the boundary is refused.">guard</span><span class="arw">&rarr;</span>
           <span class="step" tabindex="0" data-ptip="The query runs against a read-only snapshot of the LSEG data. No writes, ever, on the read path.">read-only SQL</span><span class="arw">&rarr;</span>
-          <span class="step" tabindex="0" data-ptip="Grounding checks every number in the answer against the returned rows. If one can't be matched, I destroy the whole answer instead of guessing.">grounding</span><span class="arw">&rarr;</span>
+          <span class="step" tabindex="0" data-ptip="The reconciliation control ties the figures out (identity integrity, and standardized vs as-reported). A variance is an EXCEPTION with the exact number — no prose to ground, because the queries are canonical.">reconcile</span><span class="arw">&rarr;</span>
           <span class="step" tabindex="0" data-ptip="Each result gets a lineage record and a content hash, so the exact figures are pinned and reproducible.">lineage + hash</span><span class="arw">&rarr;</span>
           <span class="step" tabindex="0" data-ptip="The hash is appended to a signed chain. Edit a past attestation and the chain breaks, so tampering can't hide.">signed audit chain</span>
         </div>
@@ -435,7 +448,7 @@
           <code class="inl">lseg-data</code>. Set <span class="ptip" tabindex="0" data-ptip="Your LSEG Data Platform / Workspace app key, entitled for these fields. Set it and I refuse to run without it, rather than returning nothing."><code class="inl">LSEG_APP_KEY</code></span>
           (an entitled LSEG Data Platform / Workspace app key), <code class="inl">pip install lseg-data</code>, and
           <code class="inl">fintel lseg ingest --live</code> attests genuine LSEG data. <b>Nothing
-          downstream changes</b> &mdash; the guard, grounding, and audit chain are identical.
+          downstream changes</b> &mdash; the guard, reconciliation, and audit chain are identical.
         </div>
       </section>
 
@@ -452,9 +465,9 @@
           <span class="arw">&rarr;</span>
           <span class="node" tabindex="0" data-ptip="Fetched rows land in a read-only snapshot with provenance (field code, retrieval date, source).">warehouse</span>
           <span class="arw">&rarr;</span>
-          <span class="node" tabindex="0" data-ptip="guard checks the SQL, grounding matches every number to a row, and the result is hash-chained.">verify + attest</span>
+          <span class="node" tabindex="0" data-ptip="guard checks the SQL, the reconciliation control ties the figures out, and the result is hash-chained.">verify + attest</span>
           <span class="arw">&rarr;</span>
-          <span class="node out" tabindex="0" data-ptip="A figure you can audit — reconciled, grounded, and tamper-evident.">auditable answer</span>
+          <span class="node out" tabindex="0" data-ptip="A figure you can audit — reconciled and tamper-evident.">auditable answer</span>
         </div>
         <p class="flow-cap">
           The key lives on the <b style="color:var(--text)">engine</b>, not on this page &mdash; that is the whole

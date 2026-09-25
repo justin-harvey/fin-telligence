@@ -56,6 +56,14 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
    changes, M&A). Fundamentals are **entity-level**, keyed by **Org PermID** in LSEG's model. Fix:
    introduce PermID as the stable key (org PermID for fundamentals, quote/instrument PermID for
    pricing); keep RIC as a mutable alias.
+   **[FIXED 2026-09-25 — P4]** New `organizations` table (`org_permid` PK — real LSEG Org PermIDs:
+   IBM `4295904307`, Apple `4295905573`, Vodafone `4295896661`). `instruments` demoted to a
+   quote/listing table whose `ric` is a **mutable alias** with an `org_permid` FK. `fundamentals`
+   re-keyed from `ric` → `org_permid` (entity grain). Reads accept the familiar RIC and resolve it to
+   the Org PermID (`resolveOrgPermid`) before touching `fundamentals`; allow-list, seed, ingest seam
+   (mints a `PENDING:<ric>` placeholder org for an unseen RIC), and CLI all migrated. Quote PermID for
+   pricing deferred with the pricing-grain fix (#6/P7). Test: re-aliasing a RIC to another org makes
+   it resolve to that entity's fundamentals — the RIC follows nothing, the org is the identity.
 
 2. **LSEG field *parameters* aren't modeled.** A `TR.*` fundamental is a function of parameters the
    schema doesn't carry:
@@ -68,6 +76,14 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
      alignment/calendarization.
    - **`ReportingState` / restatements** — no Original vs Reported vs Restated.
    - **Alignment: Standardized (COA) vs As-Reported** — we pull the standardized model (matters for #3).
+   **[FIXED 2026-09-25 — P5]** `fundamentals` now carries `scale` (actual = value·10^scale),
+   `periodicity` ('FY'/'FQ'/'LTM', read off the period label), and `reporting_state`
+   ('original'/'reported'/'restated', the seam for #5); `currency` already existed. Both
+   reconciliations compute `COUNT(DISTINCT …)` variant counts across their components and the control
+   **refuses (EXCEPTION) on mixed currency/scale/periodicity** rather than subtracting incomparable
+   figures — the FX guard. (Alignment/basis was handled in P3.) Test: Cost→GBP while Revenue is USD →
+   `currency_variants=2` → EXCEPTION "cannot reconcile across mixed currency". Seed stays raw
+   (scale 0), single-currency USD, `reporting_state='reported'`, so existing value assertions hold.
 
 3. **The reconciliation is (nearly) tautological on real LSEG data.** `reconcileGrossProfit` asserts
    `TR.GrossProfit == TR.Revenue − TR.CostOfRevenueTotal`. In LSEG's *standardized* model `SGRP` **is
@@ -78,6 +94,13 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
    Also: **the LSEG path never invokes `grounding.js`** (canonical SQL + direct column compare, no
    narration), so the page's "ground-or-refuse" emphasis isn't the guarantee actually exercised for
    LSEG — it's the reconciliation control + audit chain. Align the copy to the mechanism.
+   **[FIXED 2026-09-25 — P3]** Added a `basis` dimension (`standardized` | `as_reported`) to
+   `fundamentals`; existing standardized queries scoped to `basis='standardized'` (no double-count).
+   New `reconcileStandardizedVsAsReported` + control `PI1.1-lseg-standardized-vs-as-reported` tests
+   *data* (IBM.N FY2022 seeds a $500m reclassification → EXCEPTION; others tie). The old identity
+   control is relabelled honestly as a standardized-model **integrity/tamper** check. CLI: `fintel
+   lseg basis [RIC] [FY]`. `/lseg` copy realigned to reconciliation + hash-chained audit (grounding
+   references removed from the LSEG-specific path); root `lseg.html` re-synced.
 
 4. **Missing data silently becomes `0` (no NA handling).** `lsegRegistry` metrics are
    `SUM(CASE WHEN field_code='TR.Revenue' THEN value ELSE 0 END)` over `WHERE ric=? AND period=?`.
@@ -85,6 +108,11 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
    `NULL`** → `revenue_usd=0`, identity `0−0=0 == reported 0` → **false PASS**, or a plausible zero.
    `ingest` also `continue`s past `value == null`, so absence is indistinguishable from a real zero.
    No presence/coverage assertion. **This is the dangerous failure mode for regulated use.**
+   **[FIXED 2026-09-25 — P1]** `lsegRegistry` `fieldSum` dropped its `ELSE 0`, so an absent
+   field sums to `NULL`, not `0`. `reconcileGrossProfit` now also returns `revenue_present` /
+   `cost_present` / `gross_present` `COUNT`s, and the reconciliation control (and the `fintel lseg
+   reconcile` CLI) report **N/A** — never a false PASS — when any required component is absent.
+   Tests: `test/lseg.test.js` (NULL + presence), `test/controls.test.js` (control → N/A).
 
 5. **No point-in-time / bitemporal model.** Only `retrieved_at` (one timeline); no period-end vs
    knowledge/as-reported time; re-ingest appends/overwrites with no restatement versioning.
@@ -110,8 +138,10 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
 - **`lsegRegistry` `SUM(CASE …)` indirection** — for a single (ric, period) it sums exactly one
   matching row; it exists only to reuse the "metric = SQL fragment" pattern, and it *hides* the
   NULL-vs-0 bug (#4). A direct `WHERE field_code IN (…)` pivot is clearer and safer.
-- **Double table scan in `reconcileGrossProfit`** — two scalar subqueries over `fundamentals` with the
-  same `WHERE`. Not a UNION (guard reason doesn't apply); collapse to one pass returning all three.
+- ~~**Double table scan in `reconcileGrossProfit`**~~ **[FIXED 2026-09-25 — P2]** — was two (then five,
+  after P1) scalar subqueries over `fundamentals` with the same `WHERE`; now one aggregate SELECT
+  scanning the table once (`(Σrev) − (Σcost) AS identity_gross_usd`, `Σgross`, three presence
+  `COUNT`s), 2 bound params. Not a UNION (guard-safe).
 - **Two sources of unit truth** — `lseg_fields.unit` and the registry `unit` can drift; keep the dictionary.
 - **Seeded-but-unused fields** — only Revenue/Cost/Gross are exercised; `OperatingIncome`,
   `NetIncomeAfterTaxes`, `TotalDebtOutstanding`, `TotalAssetsReported`, `PriceClose`,
@@ -125,11 +155,11 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
 
 | # | Task | Why / acceptance | Effort | Risk |
 |---|------|------------------|--------|------|
-| P1 | **NULL-vs-0 + coverage assertion (#4)** | Distinguish absent from zero. Change `lsegRegistry` metrics (or the query) so a missing field yields `NULL`, not `0`; add a presence/`COUNT` check; reconciliation returns **N/A** (not PASS) when a required component is absent. Add a test seeding a period with a missing Revenue row → expect N/A, not PASS. | S | Low |
-| P2 | **Collapse reconcile to one pass** | Single `SELECT` over `fundamentals WHERE ric=? AND period=?` returning revenue, cost, gross (and computed gross). Keep guard-compatible (no UNION). Tests stay green. | S | Low |
-| P3 | **Reframe the reconciliation (#3)** | Prototype **Standardized vs As-Reported** (add an `as_reported` value alongside the standardized COA value, reconcile them) so the control tests *data*, not a tautology. Update `/lseg` copy to match the guarantee actually exercised (reconciliation + audit, not grounding). | M | Med |
-| P4 | **PermID identifier model (#1)** | Add `org_permid` (fundamentals) / quote PermID (pricing) as stable keys; RIC becomes an alias column. Migrate schema + seed + queries. | M | Med |
-| P5 | **Field parameters on the grain (#2)** | Add `currency`, `scale`, `periodicity`, `reporting_state` to `fundamentals`; enforce single-currency in reconciliations (FX guard). | M | Med |
+| ~~P1~~ ✅ | **NULL-vs-0 + coverage assertion (#4)** — DONE 2026-09-25 | Distinguish absent from zero. Change `lsegRegistry` metrics (or the query) so a missing field yields `NULL`, not `0`; add a presence/`COUNT` check; reconciliation returns **N/A** (not PASS) when a required component is absent. Add a test seeding a period with a missing Revenue row → expect N/A, not PASS. | S | Low |
+| ~~P2~~ ✅ | **Collapse reconcile to one pass** — DONE 2026-09-25 | Single `SELECT` over `fundamentals WHERE ric=? AND period=?` returning revenue, cost, gross (and computed gross). Keep guard-compatible (no UNION). Tests stay green. | S | Low |
+| ~~P3~~ ✅ | **Reframe the reconciliation (#3)** — DONE 2026-09-25 | Prototype **Standardized vs As-Reported** (add an `as_reported` value alongside the standardized COA value, reconcile them) so the control tests *data*, not a tautology. Update `/lseg` copy to match the guarantee actually exercised (reconciliation + audit, not grounding). | M | Med |
+| ~~P4~~ ✅ | **PermID identifier model (#1)** — DONE 2026-09-25 | Add `org_permid` (fundamentals) / quote PermID (pricing) as stable keys; RIC becomes an alias column. Migrate schema + seed + queries. | M | Med |
+| ~~P5~~ ✅ | **Field parameters on the grain (#2)** — DONE 2026-09-25 | Add `currency`, `scale`, `periodicity`, `reporting_state` to `fundamentals`; enforce single-currency in reconciliations (FX guard). | M | Med |
 | P6 | **Bitemporal keys (#5)** | Add knowledge/as-of date distinct from period date; version restatements; make reproducibility restatement-aware. | M | Med |
 | P7 | **`lseg-data` ops (#6)** | Entitlement-aware errors in `lseg_fetch.py`; move pricing to `get_history` at its own grain; batching + backoff + longer-lived session. | M | Med |
 | P8 | **Licensing/redistribution sign-off (#7)** | Usage tagging + retention/TTL; confirm caching/redistribution terms before a live key. | S (mostly non-code) | — |

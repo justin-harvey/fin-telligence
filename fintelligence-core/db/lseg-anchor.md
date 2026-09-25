@@ -10,10 +10,23 @@ exact LSEG field code each number came from.
 
 ## What is real, and what is synthetic
 
-- **Real:** the instrument **RICs** (Reuters Instrument Codes — LSEG's primary
-  instrument identifier, e.g. `IBM.N`, `AAPL.O`, `VOD.L`) and the **`TR.*` field
+- **Real:** the **Org PermIDs** (LSEG's permanent entity identifiers, permid.org
+  — `4295904307` IBM, `4295905573` Apple, `4295896661` Vodafone Group), the
+  instrument **RICs** (Reuters Instrument Codes — a *quote* identifier,
+  instrument × venue, e.g. `IBM.N`, `AAPL.O`, `VOD.L`) and the **`TR.*` field
   codes** (`TR.Revenue`, `TR.CostOfRevenueTotal`, `TR.GrossProfit`, ...). These
-  are real LSEG identifiers and must stay accurate.
+  are real LSEG identifiers and must stay accurate — validate before real ingest.
+
+### Identifier model (finding #1)
+
+Fundamentals are **entity-level**, so they key on the stable **Org PermID**, not
+on a RIC. A RIC is a *quote* id (instrument × venue) and is **mutable** — a
+ticker rename, exchange move, or M&A event can reassign it — so in the schema it
+is a **mutable alias** onto the organization (`instruments.ric → organizations.org_permid`),
+never the identity of the numbers. Reads accept the familiar RIC and resolve it
+to the Org PermID before touching `fundamentals`. (The stable quote-level key for
+*pricing* is the quote/instrument PermID; modelling pricing at its own grain is a
+separate follow-up — finding #6 — so it is not a column yet.)
 - **Synthetic:** every **value** in `fundamentals`. No LSEG entitlement is
   bundled with this repo, so the datapoints are fabricated — authored so the
   accounting identities hold exactly (e.g. Gross Profit = Revenue − Cost of
@@ -54,18 +67,45 @@ harness in `mcp/README.md`), or wire lseg-mcp into your client per
 `mcp/clients.example.json`. `src/lseg-ingest.js` re-checks every code against the
 warehouse dictionary at ingest time too, refusing unknowns with a pointer here.
 
-## The identity the reconciliation control is built around
+## The two reconciliations (and what each actually proves)
 
 For each (instrument, period) the warehouse holds Revenue, Cost of Revenue, and
-Gross Profit as separate LSEG fields. The control asserts the reporting identity
+Gross Profit on two **bases** (see `fundamentals.basis`): `standardized` (LSEG's
+Chart-of-Accounts / COA model) and `as_reported` (the figure as the company
+filed it).
+
+**1. Standardized-model integrity (`PI1.1-lseg-gross-profit-reconciliation`).**
+Asserts the reporting identity
 
 > **Gross Profit = Revenue − Cost of Revenue** (`TR.GrossProfit` =
 > `TR.Revenue` − `TR.CostOfRevenueTotal`)
 
-computing the left side from the component fields and comparing it to the
-reported `TR.GrossProfit`. PASS when they tie; EXCEPTION with the exact variance
-when a value was altered after the fact — and because every attestation is
-hash-chained, that alteration cannot hide.
+on the standardized basis. Be honest about what this proves: in LSEG's
+standardized model `SGRP` is **defined as** `SREV − SCOR`, so on clean vendor
+data the identity holds *by construction*. This control is therefore a
+**pipeline-integrity / tamper-evidence** check — it fires on ingest corruption or
+a value altered after landing (and the hash chain makes that alteration
+undeniable), **not** on a discrepancy in LSEG's own numbers.
+
+**2. Standardized vs as-reported (`PI1.1-lseg-standardized-vs-as-reported`).**
+This is the reconciliation that tests LSEG's **data**. LSEG normalises every
+issuer into the common COA so figures compare across companies; that
+normalisation can reclassify a line item across the gross-profit boundary, so the
+standardized figure and the as-reported figure legitimately differ. A **tie**
+means LSEG agrees with the filing; a **variance** is a real *classification*
+difference an analyst must understand before citing a number — which is not a
+data error and not tampering. (Synthetic seed: IBM.N FY2022 carries a modelled
+$500m reclassification to exercise this EXCEPTION path; all other seeded
+instrument-periods tie.)
+
+Both reconciliations run as one canonical, guarded, single-pass SQL query each
+(no model narrates the number, so there is no prose to ground — the guarantee is
+the reconciliation control plus the hash-chained audit), a missing component
+reads as **N/A**, never a false PASS on a zero (coverage assertion), and mixed
+**currency / scale / periodicity** across the components is refused with an
+**EXCEPTION** rather than silently subtracted (the FX guard — finding #2). Each
+`fundamentals` row carries those field parameters (`currency`, `scale`,
+`periodicity`, `reporting_state`) so the guard has something real to check.
 
 ## Fields held (all real LSEG `TR.*` codes; validated OK via lseg-mcp 2026-09-24)
 
