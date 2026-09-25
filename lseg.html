@@ -183,6 +183,35 @@
       #phin-tip .tip-tail { position: absolute; left: 24px; bottom: -7px;
         border: 7px solid transparent; border-top-color: #fff; border-bottom: 0; }
       #phin-tip.below .tip-tail { top: -7px; bottom: auto; border-top: 0; border-bottom-color: #fff; }
+
+      /* --- Connect live data panel --- */
+      .connect { background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; }
+      .connect .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+      .connect label { font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+      .connect input { background: #0b111d; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px;
+        color: var(--text); font: 400 14px "JetBrains Mono", monospace; width: 100%; }
+      .connect input:focus { outline: none; border-color: var(--accent); }
+      .connect .actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+      .connect button { background: var(--accent); color: #fff; border: 0; border-radius: 9px; padding: 10px 18px;
+        font: 600 14px Inter, sans-serif; cursor: pointer; }
+      .connect button:hover { opacity: .9; }
+      .connect button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+      .connect .status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+      .connect .status .dot { width: 9px; height: 9px; border-radius: 999px; background: var(--muted); flex: 0 0 auto; }
+      .connect .status.ok { color: var(--green); } .connect .status.ok .dot { background: var(--green); }
+      .connect .status.err { color: var(--red); } .connect .status.err .dot { background: var(--red); }
+      .connect .note { font-size: 12px; color: var(--muted); margin-top: 14px; line-height: 1.55; }
+      .connect .note code { color: #c7cede; }
+      /* activation flow diagram */
+      .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 18px;
+        font-family: "JetBrains Mono", monospace; font-size: 12px; }
+      .flow .node { padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--text); }
+      .flow .node.here { border-style: dashed; color: var(--muted); }
+      .flow .node.key { border-color: var(--accent); color: #fff; background: rgba(99,102,241,0.16); font-weight: 500; }
+      .flow .node.out { border-color: rgba(52,211,153,0.5); color: var(--green); }
+      .flow .arw { color: var(--accent); }
+      .flow .pending { border-color: rgba(251,191,36,0.5); color: var(--amber); }
+      .flow-cap { font-size: 12px; color: var(--muted); margin: 0 0 20px; line-height: 1.55; }
     </style>
   </head>
   <body>
@@ -411,6 +440,53 @@
       </section>
 
       <section class="section">
+        <h2>Connect live data</h2>
+        <div class="flow">
+          <span class="node here" tabindex="0" data-ptip="This page. It never holds the credential — it only points at a deployed engine. Nothing is sent from here until you set an engine URL.">this page</span>
+          <span class="arw">&rarr;</span>
+          <span class="node key" tabindex="0" data-ptip="The engine (fintel serve) is where LSEG_APP_KEY lives, as a server-side env var. The credential stays on the backend, never in the browser.">engine 🔑 <span style="opacity:.85">LSEG_APP_KEY</span></span>
+          <span class="arw">&rarr;</span>
+          <span class="node" tabindex="0" data-ptip="The Python library that actually calls LSEG. The engine runs it against your entitlement.">lseg-data</span>
+          <span class="arw">&rarr;</span>
+          <span class="node pending" tabindex="0" data-ptip="Your entitled LSEG session — the paid part. This is what a Workspace/Data Platform app key unlocks.">LSEG Workspace</span>
+          <span class="arw">&rarr;</span>
+          <span class="node" tabindex="0" data-ptip="Fetched rows land in a read-only snapshot with provenance (field code, retrieval date, source).">warehouse</span>
+          <span class="arw">&rarr;</span>
+          <span class="node" tabindex="0" data-ptip="guard checks the SQL, grounding matches every number to a row, and the result is hash-chained.">verify + attest</span>
+          <span class="arw">&rarr;</span>
+          <span class="node out" tabindex="0" data-ptip="A figure you can audit — reconciled, grounded, and tamper-evident.">auditable answer</span>
+        </div>
+        <p class="flow-cap">
+          The key lives on the <b style="color:var(--text)">engine</b>, not on this page &mdash; that is the whole
+          point of keeping a credential server-side. The field below stores your engine URL and key
+          <b style="color:var(--text)">in this browser only</b> and points the page at that engine. Live fetch needs the
+          engine backend deployed (<code class="inl">fintel serve</code>), which is pending (M7), so today it will
+          read <span class="pending" style="border:0;padding:0">not connected</span>.
+        </p>
+        <div class="connect">
+          <div class="field">
+            <label for="engine-url">Engine URL</label>
+            <input id="engine-url" type="url" inputmode="url" placeholder="https://your-fintel-engine.fly.dev" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="lseg-key">LSEG app key</label>
+            <input id="lseg-key" type="password" placeholder="your LSEG Data Platform / Workspace app key" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="actions">
+            <button id="connect-btn" type="button">Connect</button>
+            <button id="clear-btn" type="button" class="ghost">Clear</button>
+            <span class="status" id="connect-status"><span class="dot"></span><span class="label">not connected</span></span>
+          </div>
+          <div class="note">
+            Stored only in this browser (<code>localStorage</code>) — nothing leaves the page until you set an
+            engine URL, and then only that engine is contacted. The live fetch runs on the engine
+            (<code>fintel serve</code> with <code>LSEG_APP_KEY</code> + <code>lseg-data</code> against a
+            Workspace session). Don't paste a production key on a shared machine.
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
         <h2>Run it yourself</h2>
         <pre class="cli"><span class="c"># synthetic — no LSEG entitlement needed</span>
 node bin/fintel.js <span class="p">lseg seed</span>
@@ -551,6 +627,63 @@ node bin/fintel.js <span class="p">lseg ingest IBM.N --period FY2023 --live</spa
         });
         window.addEventListener('scroll', hide, true);
         window.addEventListener('resize', hide);
+      })();
+    </script>
+
+    <script>
+      // Connect live data: store the engine URL + LSEG key in the browser only,
+      // and probe the engine for reachability. Honest status; no key leaves the
+      // page unless an engine URL is set (and then only that engine is called).
+      (function () {
+        var url = document.getElementById('engine-url');
+        var key = document.getElementById('lseg-key');
+        var btn = document.getElementById('connect-btn');
+        var clr = document.getElementById('clear-btn');
+        var box = document.getElementById('connect-status');
+        if (!url || !btn || !box) return;
+        var label = box.querySelector('.label');
+        var KEY = 'fintel_lseg_conn';
+
+        function setStatus(state, msg) {
+          box.className = 'status' + (state === 'ok' ? ' ok' : state === 'err' ? ' err' : '');
+          label.textContent = msg;
+        }
+        function save() {
+          try { localStorage.setItem(KEY, JSON.stringify({ engineUrl: url.value.trim(), appKey: key.value })); } catch (e) {}
+          window.FINTEL_LSEG = { engineUrl: url.value.trim(), appKey: key.value };
+        }
+        function probe(u) {
+          setStatus('idle', 'checking…');
+          var ctrl = new AbortController();
+          var t = setTimeout(function () { ctrl.abort(); }, 5000);
+          fetch(u, { method: 'GET', mode: 'cors', signal: ctrl.signal })
+            .then(function () { clearTimeout(t); setStatus('ok', 'connected — engine reachable'); })
+            .catch(function () { clearTimeout(t); setStatus('err', 'engine unreachable (deploy pending, or CORS not allowed)'); });
+        }
+
+        try {
+          var saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+          if (saved.engineUrl) url.value = saved.engineUrl;
+          if (saved.appKey) key.value = saved.appKey;
+        } catch (e) {}
+
+        setStatus('idle', url.value.trim()
+          ? 'saved — click Connect to check the engine'
+          : 'not connected — engine backend pending (M7)');
+
+        btn.addEventListener('click', function () {
+          save();
+          var u = url.value.trim();
+          if (!u) { setStatus('idle', 'not connected — set your engine URL (backend pending, M7)'); return; }
+          if (!/^https?:\/\//.test(u)) { setStatus('err', 'enter a full URL (https://…)'); return; }
+          probe(u);
+        });
+        clr.addEventListener('click', function () {
+          url.value = ''; key.value = '';
+          try { localStorage.removeItem(KEY); } catch (e) {}
+          window.FINTEL_LSEG = null;
+          setStatus('idle', 'cleared');
+        });
       })();
     </script>
   </body>

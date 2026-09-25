@@ -72,6 +72,13 @@ Everything is written; this is provisioning. Full guide in **`supabase/README.md
 - **Point the site at it:** set `window.FINTEL_PROXY_URL` to the function URL. The
   panel's "Re-run live" then calls the proxy; payload shape is identical to the
   embedded data, so no UI change.
+- **`/lseg` "Connect live data" panel:** the LSEG page has a browser-side panel
+  (engine URL + LSEG app key, stored in `localStorage`, exposed as
+  `window.FINTEL_LSEG = { engineUrl, appKey }`) that currently only probes the
+  engine URL for reachability and shows status. When the engine is deployed, wire
+  its "Connect" to actually drive a live `lseg reconcile` via the engine/proxy —
+  the credential stays server-side (env `LSEG_APP_KEY`); the panel key is a
+  convenience for a self-hosted engine, not a substitute for the server env var.
 
 ### 2. Warehouse → Supabase Postgres + RLS (security fast-follow)
 Turns the M5 principal-scope hook into DB-enforced row-level security. Requires:
