@@ -1,3 +1,4 @@
-# Clean URL for the Enron reporting-gap page
+# Clean URLs for the standalone demo pages
 /enron    /enron.html    200
 /controls  /controls.html  200
+/lseg    /lseg.html    200

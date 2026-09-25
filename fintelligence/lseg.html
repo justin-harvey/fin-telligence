@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Fin-Telligence — The Enron Reporting Gap</title>
-    <meta name="description" content="Enron's reported FY2000 figures set against what the underlying rows support — every number grounded, hashed, and tamper-evident." />
+    <title>Fin-Telligence — LSEG Fundamentals, Audited</title>
+    <meta name="description" content="LSEG company fundamentals addressed by real TR.* field codes — reconciled to their component line items, grounded, hashed, and tamper-evident. Paired with the open-source lseg-mcp." />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -171,7 +171,7 @@
     <header class="site">
       <div class="wrap">
         <div class="brand">Fin<span>·</span>Telligence</div>
-        <span class="back"><a href="/">Overview</a> &nbsp;·&nbsp; <a href="/lseg">LSEG</a> &nbsp;·&nbsp; <a href="/controls">SOC&nbsp;2 panel</a></span>
+        <span class="back"><a href="/">Overview</a> &nbsp;·&nbsp; <a href="/enron">Enron</a> &nbsp;·&nbsp; <a href="/controls">SOC&nbsp;2 panel</a></span>
       </div>
     </header>
 
@@ -179,18 +179,18 @@
       <section class="hero">
         <div class="hero-grid">
           <div class="hero-copy">
-            <p class="kicker">Case study · reporting-gap attestation</p>
-            <h1>The Enron reporting gap<br /><span class="thin">what was reported, versus what the rows support.</span></h1>
+            <p class="kicker">Live vendor data · verified &amp; attested</p>
+            <h1>LSEG fundamentals<br /><span class="thin">company financials you can audit, field by field.</span></h1>
             <p class="lede">
-              Enron's FY2000 annual report is the case the whole thesis is haunted by: numbers that
-              were internally consistent on paper and disconnected from reality. Fin-Telligence runs
-              the same verified pipeline over it, computing the <em>reported</em> figure and the
-              <em>underlying</em> figure in one guarded query, so the distance between them is a
-              grounded, hash-chained, tamper-evident result, not an assertion.
+              LSEG (London Stock Exchange Group, formerly Refinitiv) company fundamentals, addressed by
+              real <code>TR.*</code> field codes over real RICs. Fin-Telligence reconciles a reported
+              figure to the line items that compose it and hash-chains the result, with provenance down
+              to the exact LSEG field. It pairs with the open-source <b>lseg-mcp</b>: that server gets
+              the field mapping right, Fin-Telligence makes the number auditable.
             </p>
           </div>
           <aside class="phin-aside">
-            <div id="phin-bubble">Psst, click me. I'll tell you how this pipeline differs from the usual financial AI.</div>
+            <div id="phin-bubble">Psst, click me. I'll tell you how I turn LSEG data into numbers you can audit.</div>
             <div id="phin-float"><img id="phin" src="/assets/phineas/phin.png" alt="Phineas the dolphin" title="psst, click me" /></div>
             <div id="phin-hint">click Phin</div>
           </aside>
@@ -198,19 +198,119 @@
       </section>
 
       <section class="section">
-        <h2>How this differs from previous solutions</h2>
+        <h2>Two servers, one auditable answer</h2>
+        <div class="cards">
+          <div class="card">
+            <h3>lseg-mcp &mdash; resolves &amp; drafts</h3>
+            <p class="sub">The open-source field expert.</p>
+            <div class="gap" style="background:none;border:0;padding:0;margin:0">
+              Resolves a concept (&ldquo;gross profit&rdquo;) to the correct modern <code class="inl">TR.*</code>
+              field, validates it against LSEG's COA/FCC mapping matrix, and drafts the runnable
+              <code class="inl">lseg-data</code> call. It <b>never returns market data</b> &mdash; it only
+              gets the retrieval right.
+            </div>
+          </div>
+          <div class="card">
+            <h3>Fin-Telligence &mdash; verifies &amp; attests</h3>
+            <p class="sub">The audit layer.</p>
+            <div class="gap" style="background:none;border:0;padding:0;margin:0">
+              Runs the landed snapshot through <b>guard &rarr; grounding &rarr; hash-chained audit</b>,
+              reconciles a reported figure against the components that should compose it, and
+              <b>refuses</b> on any mismatch. The join point is ingestion, not runtime.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>The reconciliation</h2>
+        <div class="cards">
+          <div class="card">
+            <h3>Gross profit ties to its components</h3>
+            <p class="sub">IBM.N &middot; FY2023 &middot; the identity a control asserts.</p>
+            <div class="figrow">
+              <span class="label">Revenue <span class="tag real">TR.Revenue</span></span>
+              <span class="val reported">$61,860m</span>
+            </div>
+            <div class="figrow">
+              <span class="label">Cost of revenue <span class="tag real">TR.CostOfRevenueTotal</span></span>
+              <span class="val gross">$27,946m</span>
+            </div>
+            <div class="figrow">
+              <span class="label">Computed gross (Revenue &minus; Cost) <span class="tag synth">derived</span></span>
+              <span class="val net">$33,914m</span>
+            </div>
+            <div class="figrow">
+              <span class="label">Reported gross <span class="tag real">TR.GrossProfit</span></span>
+              <span class="val net">$33,914m</span>
+            </div>
+            <div class="gap">
+              <b>PASS.</b> The identity <b>Gross Profit = Revenue &minus; Cost of Revenue</b> ties out
+              exactly. Alter any component and the control raises an <b>EXCEPTION</b> with the precise
+              variance &mdash; and the hash chain catches the edit.
+            </div>
+          </div>
+          <div class="card">
+            <h3>Provenance to the field code</h3>
+            <p class="sub">Every value cites where it came from.</p>
+            <div class="gap" style="background:none;border:0;padding:0;margin:0 0 12px">
+              Data is stored long-format &mdash; one row per (instrument, field, period) &mdash; carrying
+              the <code class="inl">TR.*</code> code, the retrieval date, and the source feed. A figure in an
+              answer resolves to its blessed LSEG field the one agreed way, so &ldquo;where did this number
+              come from?&rdquo; has an exact, verifiable answer.
+            </div>
+            <div class="figrow">
+              <span class="label">Grain</span>
+              <span class="label" style="color:#c7cede">instrument × field × period</span>
+            </div>
+            <div class="figrow">
+              <span class="label">Instruments</span>
+              <span class="label" style="color:#c7cede">IBM.N · AAPL.O · VOD.L</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Validated against LSEG's own dictionary</h2>
         <p class="lede" style="font-size:16px;max-width:760px">
-          The individual patterns here (AST parsing, read-only database flags, regex output checks,
-          and cryptographic hash logs) are standard computer-science primitives. Combining them into a
-          zero-tolerance <b style="color:var(--text)">ground-or-refuse pipeline with cryptographic
-          attestation</b> is an uncommon design choice next to standard financial AI tools.
+          Every field code was checked live through lseg-mcp's <code class="inl">validate_lseg_formula</code>
+          against LSEG's COA/FCC mapping matrix. All nine returned <span class="tag real">OK</span>.
         </p>
-        <div class="disc" style="margin:18px 0 24px">
+        <div class="cmp-wrap" style="margin-top:16px">
+          <table class="cmp">
+            <thead>
+              <tr><th class="feat">LSEG field</th><th>Concept</th><th>Maps to (COA)</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              <tr><th class="feat"><code class="inl">TR.Revenue</code></th><td class="std">Revenue</td><td class="ft">Income Statement · <code class="inl">SREV</code></td><td class="ft"><span class="tag real">OK</span></td></tr>
+              <tr><th class="feat"><code class="inl">TR.CostOfRevenueTotal</code></th><td class="std">Cost of Revenue, Total</td><td class="ft">Income Statement · <code class="inl">SCOR</code></td><td class="ft"><span class="tag real">OK</span></td></tr>
+              <tr><th class="feat"><code class="inl">TR.GrossProfit</code></th><td class="std">Gross Profit</td><td class="ft">Income Statement · <code class="inl">SGRP</code></td><td class="ft"><span class="tag real">OK</span></td></tr>
+              <tr><th class="feat"><code class="inl">TR.OperatingIncome</code></th><td class="std">Operating Income</td><td class="ft">Income Statement · <code class="inl">SOPI</code></td><td class="ft"><span class="tag real">OK</span></td></tr>
+              <tr><th class="feat"><code class="inl">TR.NetIncomeAfterTaxes</code></th><td class="std">Net Income After Taxes</td><td class="ft">Income Statement · <code class="inl">TIAT</code></td><td class="ft"><span class="tag real">OK</span></td></tr>
+              <tr><th class="feat"><code class="inl">TR.TotalDebtOutstanding</code></th><td class="std">Total Debt</td><td class="ft">Balance Sheet · <code class="inl">STLD</code></td><td class="ft"><span class="tag real">OK</span></td></tr>
+              <tr><th class="feat"><code class="inl">TR.TotalAssetsReported</code></th><td class="std">Total Assets, Reported</td><td class="ft">Balance Sheet · <code class="inl">ATOT</code></td><td class="ft"><span class="tag real">OK</span></td></tr>
+              <tr><th class="feat"><code class="inl">TR.PriceClose</code></th><td class="std">Closing price (daily)</td><td class="ft">Pricing (extended dict)</td><td class="ft"><span class="tag real">OK</span></td></tr>
+              <tr><th class="feat"><code class="inl">TR.CompanyMarketCap</code></th><td class="std">Market capitalisation</td><td class="ft">Reference (extended dict)</td><td class="ft"><span class="tag real">OK</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="src">
+          Validated 2026-09-24 via lseg-mcp. Note: <code>TR.GrossProfit</code> is available for
+          Industrial issuers, not Bank / Insurance / Utility &mdash; so the gross-profit identity
+          applies to industrials (the seeded RICs are).
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>How this differs from standard financial AI</h2>
+        <div class="disc" style="margin:0 0 24px">
           Most commercial text-to-SQL and financial-AI platforms prioritise <b>helpfulness and
           flexibility</b>, handing the user a best-guess answer. Fin-Telligence prioritises
-          <b>non-repudiation and hard refusal</b>.
+          <b>non-repudiation and hard refusal</b> &mdash; the individual patterns are standard
+          computer-science primitives, but combining them into a zero-tolerance ground-or-refuse
+          pipeline with cryptographic attestation is the uncommon choice.
         </div>
-
         <div class="cmp-wrap">
           <table class="cmp">
             <thead>
@@ -223,6 +323,11 @@
                 <td class="ft">Pre-execution AST parsing (<code class="inl">guard.js</code>) enforcing SELECT-only, CTE allow-lists, and forced <code class="inl">LIMIT</code> bounds</td>
               </tr>
               <tr>
+                <th class="feat">Field mapping</th>
+                <td class="std">The model guesses a field name from the prompt</td>
+                <td class="ft">lseg-mcp resolves the concept to the correct <code class="inl">TR.*</code> code and validates it against the COA/FCC matrix before ingest</td>
+              </tr>
+              <tr>
                 <th class="feat">Numeric accuracy</th>
                 <td class="std">LLM-as-a-judge or prompt engineering to format DB rows</td>
                 <td class="ft">Deterministic post-prose verification (<code class="inl">grounding.js</code>) that matches <b>every</b> number back to SQL row outputs</td>
@@ -230,7 +335,7 @@
               <tr>
                 <th class="feat">Failure mode</th>
                 <td class="std">Best-guess response with potential rounding or hallucination errors</td>
-                <td class="ft"><b>Explicit refusal.</b> If a single number in the prose can't be mapped to the raw data, the response is destroyed</td>
+                <td class="ft"><b>Explicit refusal.</b> If a single number can't be mapped to the raw data, the response is destroyed</td>
               </tr>
               <tr>
                 <th class="feat">Audit logging</th>
@@ -239,64 +344,6 @@
               </tr>
             </tbody>
           </table>
-        </div>
-
-        <h2 style="margin-top:34px">What makes it distinct</h2>
-        <ul class="distinct">
-          <li><b>Zero-tolerance output verification.</b> Guardrail frameworks like NeMo or Guardrails AI
-          evaluate semantic safety or prompt injection. Fin-Telligence treats numbers like foreign keys:
-          if the narrative claims <code class="inl">$100,789m</code> and that exact figure (or its unit
-          transform) isn't in the returned dataset, the pipeline aborts.</li>
-          <li><b>Trade-surveillance attestation.</b> Most AI audit logs track <em>who</em> sent a prompt,
-          for billing or security. Attaching a cryptographic hash-chain to regulatory queries (MiFID II /
-          MAR trade-abuse findings) stops internal operators from backdating or quietly altering a
-          surveillance flag.</li>
-        </ul>
-
-        <div class="disc" style="margin-top:22px">
-          <b>The main trade-off:</b> this architecture trades conversational fluidity for legal and audit
-          safety. It will refuse queries far more often than tools like ChatGPT or Koyfin whenever SQL
-          translation is imperfect or the math falls outside the verifier's allowed rules. For regulatory
-          reporting, forensic accounting, or internal compliance, that trade-off is usually the requirement.
-        </div>
-      </section>
-
-      <section class="section">
-        <h2>Two mechanics of the gap</h2>
-        <div class="cards">
-          <div class="card">
-            <h3>Revenue: gross vs. net</h3>
-            <p class="sub">Trades booked at full notional turned $40bn into $100bn.</p>
-            <div class="figrow">
-              <span class="label">Reported revenue (gross) <span class="tag real">real 10-K</span></span>
-              <span class="val gross">$100,789m</span>
-            </div>
-            <div class="figrow">
-              <span class="label">Merchant margin actually earned (net) <span class="tag synth">modelled</span></span>
-              <span class="val net">$1,953m</span>
-            </div>
-            <div class="gap">
-              Revenue was booked on a <b>gross</b> basis &mdash; the full notional of each energy
-              trade counted as revenue. The net merchant margin is <b>~1.9%</b> of the headline.
-            </div>
-          </div>
-
-          <div class="card">
-            <h3>Debt: reported vs. true</h3>
-            <p class="sub">Billions parked off the balance sheet in special-purpose entities.</p>
-            <div class="figrow">
-              <span class="label">Reported debt (on balance sheet) <span class="tag real">real 10-K</span></span>
-              <span class="val reported">$10,229m</span>
-            </div>
-            <div class="figrow">
-              <span class="label">True debt incl. off-balance-sheet SPEs <span class="tag synth">illustrative</span></span>
-              <span class="val true">$21,729m</span>
-            </div>
-            <div class="gap">
-              Debt held in the SPEs (<b>JEDI, Chewco, LJM1/2, Raptor, Whitewing</b>) never touched
-              the reported balance sheet. Consolidating them more than <b>doubles</b> the leverage.
-            </div>
-          </div>
         </div>
       </section>
 
@@ -311,42 +358,59 @@
           <span class="step">signed audit chain</span>
         </div>
         <div class="prov" style="margin-top:18px">
-          <div class="row"><span class="k">scenario     </span> debt_reported_vs_true &nbsp; FY2000</div>
-          <div class="row"><span class="k">result hash  </span> b69b15dc732765b05462230971ec51cc…</div>
-          <div class="row"><span class="k">audit entry  </span> #1 &nbsp; 667df404bc8d3235… &nbsp; <span class="pill">chain INTACT</span></div>
-          <div class="row"><span class="k">compliance   </span> off-balance-sheet · leverage · reproducible</div>
+          <div class="row"><span class="k">scenario     </span> lseg_gross_profit_reconciliation &nbsp; IBM.N &nbsp; FY2023</div>
+          <div class="row"><span class="k">figures      </span> identity_gross_usd = reported_gross_usd = 33,914,000,000</div>
+          <div class="row"><span class="k">audit entry  </span> #1 &nbsp; a5f0c1d2e3b47788… &nbsp; <span class="pill">chain INTACT</span></div>
+          <div class="row"><span class="k">compliance   </span> reconciliation · processing-integrity · reproducible</div>
         </div>
         <p class="src">
-          The figures compute <em>in SQL</em> and pin to a deterministic seed, so re-running
-          reproduces the same result hash exactly &mdash; an auditor can recompute and compare.
-          Edit a recorded attestation after the fact and <code>verify()</code> reports the precise
-          entry that changed.
+          The figures compute <em>in SQL</em> over a read-only snapshot, so re-running reproduces the same
+          result hash exactly &mdash; an auditor can recompute and compare. Edit a recorded attestation
+          after the fact and <code>verify()</code> reports the precise entry that changed.
         </p>
       </section>
 
       <section class="section">
+        <h2>From synthetic to live in one credential</h2>
+        <div class="disc">
+          The values here are <b>synthetic</b>, authored so the identities hold exactly. The ingest seam
+          (<code class="inl">src/lseg-ingest.js</code>) is a session interface:
+          <code class="inl">FakeLsegSession</code> runs the whole path with <b>no entitlement</b> (this demo),
+          and <code class="inl">RealLsegSession</code> fetches real fundamentals through
+          <code class="inl">lseg-data</code>. Set <code class="inl">LSEG_APP_KEY</code> (an entitled LSEG
+          Data Platform / Workspace app key), <code class="inl">pip install lseg-data</code>, and
+          <code class="inl">fintel lseg ingest --live</code> attests genuine LSEG data. <b>Nothing
+          downstream changes</b> &mdash; the guard, grounding, and audit chain are identical.
+        </div>
+      </section>
+
+      <section class="section">
         <h2>Run it yourself</h2>
-        <pre class="cli"><span class="c"># no credential needed — canonical queries over real 10-K anchors</span>
-node bin/fintel.js <span class="p">enron seed</span>
-node bin/fintel.js <span class="p">enron revenue</span>    <span class="c"># gross vs net revenue, attested</span>
-node bin/fintel.js <span class="p">enron debt</span>       <span class="c"># reported vs true debt incl. SPEs</span>
-node bin/fintel.js <span class="p">enron audit</span>      <span class="c"># verify the hash chain</span></pre>
+        <pre class="cli"><span class="c"># synthetic — no LSEG entitlement needed</span>
+node bin/fintel.js <span class="p">lseg seed</span>
+node bin/fintel.js <span class="p">lseg fundamentals IBM.N FY2023</span>   <span class="c"># attested snapshot, each concept → its TR.* field</span>
+node bin/fintel.js <span class="p">lseg reconcile IBM.N FY2023</span>      <span class="c"># gross profit = revenue − cost of revenue</span>
+node bin/fintel.js <span class="p">lseg ingest IBM.N --period FY2024</span>   <span class="c"># land data via the ingest seam (fake session)</span>
+node bin/fintel.js <span class="p">lseg audit</span>                        <span class="c"># verify the LSEG audit chain</span>
+
+<span class="c"># real LSEG data — needs an entitlement</span>
+export LSEG_APP_KEY=<span class="p">&lt;your-app-key&gt;</span> <span class="c"># and: pip install lseg-data, Workspace running</span>
+node bin/fintel.js <span class="p">lseg ingest IBM.N --period FY2023 --live</span></pre>
       </section>
 
       <section class="section">
         <h2>What is real, and what is synthetic</h2>
         <div class="disc">
-          <b>The aggregates are real.</b> Total revenues, net income, and reported debt reconcile
-          to Enron's actual reported figures, transcribed verbatim from the filing and stored with
-          the citation on every row. <b>The transaction-level rows are synthetic</b> &mdash; there is
-          no public Enron general ledger &mdash; and the off-balance-sheet SPE amounts are
-          illustrative of the mechanism, not a claimed exact historical total. For a tool about
-          traceable figures, fabricated data labelled as fabricated is fine; fabricated data
-          presented as real is the exact failure this project exists to prevent. Nothing here is a
-          compliance claim.
+          <b>Real:</b> the instrument RICs (<code>IBM.N</code>, <code>AAPL.O</code>, <code>VOD.L</code>) and
+          the <code>TR.*</code> field codes &mdash; validated against LSEG's mapping matrix through lseg-mcp.
+          <b>Synthetic:</b> every value in the fundamentals table, authored so the accounting identities
+          hold exactly and labelled synthetic. For a tool about traceable figures, fabricated data labelled
+          as fabricated is fine; fabricated data presented as real is the exact failure this project exists
+          to prevent. Nothing here is investment advice or a claim about any company's actual results.
           <div class="src">
-            Source: ENRON CORP 10-K, fiscal year ended Dec 31 2000, filed 2001-04-02 &mdash;
-            SEC EDGAR accession <code>0001024401-01-500010</code> (public domain).
+            Field codes validated via
+            <a href="https://github.com/GreenGrassBlueOcean/lseg_mcp">GreenGrassBlueOcean/lseg_mcp</a>;
+            values synthetic (see <code>db/lseg-anchor.md</code>).
           </div>
         </div>
       </section>
@@ -371,12 +435,12 @@ node bin/fintel.js <span class="p">enron audit</span>      <span class="c"># ver
         if (!img) return;
 
         var LINES = [
-          "These parts are all standard CS. Bolting them into a ground-or-refuse pipeline with a signed hash chain is the uncommon part.",
-          "Most text-to-SQL tools optimise for a helpful best guess. I optimise for non-repudiation and a hard refusal.",
-          "I treat numbers like foreign keys. If a figure in the prose isn't in the returned rows, the whole answer gets destroyed.",
-          "guard.js parses the SQL before it runs: SELECT only, allow-listed CTEs, forced LIMIT. No system-prompt promises.",
-          "Every prompt, query and output is hash-chained. Backdate or edit one later and the chain verification breaks.",
-          "The trade-off is real: I refuse more often than ChatGPT or Koyfin. For forensic and regulatory work, that's the point."
+          "lseg-mcp gets the field mapping right. I make the number auditable. Two servers, one answer you can trust.",
+          "Every value cites its TR.* code. Ask where a number came from and I point at the exact LSEG field.",
+          "I check the identity: Gross Profit equals Revenue minus Cost of Revenue. It ties out, or I raise an exception.",
+          "All nine TR.* codes were validated live against LSEG's own COA matrix. Every one came back OK.",
+          "The values here are synthetic and labelled so. The RICs and field codes are real.",
+          "Add a license key and lseg-data, and the same pipeline attests real LSEG data. Nothing downstream changes."
         ];
 
         var busy = false;
