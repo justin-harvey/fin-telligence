@@ -165,6 +165,24 @@
         #phin { width: 168px; }
         #phin-bubble { bottom: 200px; }
       }
+
+      /* --- Phineas tooltips: hover/tap a term for a plain-language bubble --- */
+      .ptip { color: var(--blue); border-bottom: 1px dotted currentColor; cursor: help; }
+      .ptip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+      [data-ptip] { cursor: help; }
+      .pipe .step[data-ptip]:hover, .pipe .step[data-ptip]:focus-visible { border-color: var(--accent); color: #fff; outline: none; }
+      #phin-tip {
+        position: fixed; z-index: 60; max-width: 300px; display: none;
+        background: #fff; color: #111827; font: 500 13px/1.45 Inter, sans-serif;
+        padding: 10px 12px; border-radius: 13px; box-shadow: 0 12px 34px rgba(0,0,0,.45);
+        pointer-events: none;
+      }
+      #phin-tip.show { display: block; }
+      #phin-tip .row { display: flex; gap: 9px; align-items: flex-start; }
+      #phin-tip img { width: 34px; height: auto; image-rendering: pixelated; flex: 0 0 auto; }
+      #phin-tip .tip-tail { position: absolute; left: 24px; bottom: -7px;
+        border: 7px solid transparent; border-top-color: #fff; border-bottom: 0; }
+      #phin-tip.below .tip-tail { top: -7px; bottom: auto; border-top: 0; border-bottom-color: #fff; }
     </style>
   </head>
   <body>
@@ -183,10 +201,12 @@
             <h1>LSEG fundamentals<br /><span class="thin">company financials you can audit, field by field.</span></h1>
             <p class="lede">
               LSEG (London Stock Exchange Group, formerly Refinitiv) company fundamentals, addressed by
-              real <code>TR.*</code> field codes over real RICs. Fin-Telligence reconciles a reported
-              figure to the line items that compose it and hash-chains the result, with provenance down
-              to the exact LSEG field. It pairs with the open-source <b>lseg-mcp</b>: that server gets
-              the field mapping right, Fin-Telligence makes the number auditable.
+              real <span class="ptip" tabindex="0" data-ptip="TR.* codes are LSEG's field names: TR.Revenue is revenue, TR.GrossProfit is gross profit. lseg-mcp resolves the right one and I cite it on every value."><code>TR.*</code> field codes</span>
+              over real <span class="ptip" tabindex="0" data-ptip="A RIC (Reuters Instrument Code) is LSEG's ID for a security. IBM.N is IBM on the NYSE. It's how I know exactly which instrument a number belongs to.">RICs</span>.
+              Fin-Telligence reconciles a reported figure to the line items that compose it and
+              hash-chains the result, with provenance down to the exact LSEG field. It pairs with the
+              open-source <span class="ptip" tabindex="0" data-ptip="The open-source server that resolves and validates LSEG field codes and drafts the retrieval call. It never returns market data, it just gets the mapping right. I make the number auditable."><b>lseg-mcp</b></span>:
+              that server gets the field mapping right, Fin-Telligence makes the number auditable.
             </p>
           </div>
           <aside class="phin-aside">
@@ -274,8 +294,11 @@
       <section class="section">
         <h2>Validated against LSEG's own dictionary</h2>
         <p class="lede" style="font-size:16px;max-width:760px">
-          Every field code was checked live through lseg-mcp's <code class="inl">validate_lseg_formula</code>
-          against LSEG's COA/FCC mapping matrix. All nine returned <span class="tag real">OK</span>.
+          Every field code was checked live through lseg-mcp's
+          <span class="ptip" tabindex="0" data-ptip="lseg-mcp's authoritative check: does this field exist in LSEG's mapping matrix, and does it fit the instrument's industry? All nine of mine came back OK."><code class="inl">validate_lseg_formula</code></span>
+          against LSEG's
+          <span class="ptip" tabindex="0" data-ptip="COA (Chart of Accounts) and FCC are LSEG's canonical line-item codes behind a field. TR.Revenue maps to COA SREV. Validating against the matrix means the field is the real, standardised one.">COA/FCC mapping matrix</span>.
+          All nine returned <span class="tag real">OK</span>.
         </p>
         <div class="cmp-wrap" style="margin-top:16px">
           <table class="cmp">
@@ -308,7 +331,8 @@
           Most commercial text-to-SQL and financial-AI platforms prioritise <b>helpfulness and
           flexibility</b>, handing the user a best-guess answer. Fin-Telligence prioritises
           <b>non-repudiation and hard refusal</b> &mdash; the individual patterns are standard
-          computer-science primitives, but combining them into a zero-tolerance ground-or-refuse
+          computer-science primitives, but combining them into a zero-tolerance
+          <span class="ptip" tabindex="0" data-ptip="Ground-or-refuse: either every number in the answer is backed by a real row, or I refuse the answer entirely. No confident-sounding guesses.">ground-or-refuse</span>
           pipeline with cryptographic attestation is the uncommon choice.
         </div>
         <div class="cmp-wrap">
@@ -350,12 +374,12 @@
       <section class="section">
         <h2>Every figure carries its provenance</h2>
         <div class="pipe">
-          <span class="step">question</span><span class="arw">&rarr;</span>
-          <span class="step">guard</span><span class="arw">&rarr;</span>
-          <span class="step">read-only SQL</span><span class="arw">&rarr;</span>
-          <span class="step">grounding</span><span class="arw">&rarr;</span>
-          <span class="step">lineage + hash</span><span class="arw">&rarr;</span>
-          <span class="step">signed audit chain</span>
+          <span class="step" tabindex="0" data-ptip="A plain-English question about a company's fundamentals. Hover me for the rest of the pipeline.">question</span><span class="arw">&rarr;</span>
+          <span class="step" tabindex="0" data-ptip="guard.js parses the SQL before it runs: SELECT only, allow-listed tables and columns, a forced LIMIT. Anything outside the boundary is refused.">guard</span><span class="arw">&rarr;</span>
+          <span class="step" tabindex="0" data-ptip="The query runs against a read-only snapshot of the LSEG data. No writes, ever, on the read path.">read-only SQL</span><span class="arw">&rarr;</span>
+          <span class="step" tabindex="0" data-ptip="Grounding checks every number in the answer against the returned rows. If one can't be matched, I destroy the whole answer instead of guessing.">grounding</span><span class="arw">&rarr;</span>
+          <span class="step" tabindex="0" data-ptip="Each result gets a lineage record and a content hash, so the exact figures are pinned and reproducible.">lineage + hash</span><span class="arw">&rarr;</span>
+          <span class="step" tabindex="0" data-ptip="The hash is appended to a signed chain. Edit a past attestation and the chain breaks, so tampering can't hide.">signed audit chain</span>
         </div>
         <div class="prov" style="margin-top:18px">
           <div class="row"><span class="k">scenario     </span> lseg_gross_profit_reconciliation &nbsp; IBM.N &nbsp; FY2023</div>
@@ -375,10 +399,12 @@
         <div class="disc">
           The values here are <b>synthetic</b>, authored so the identities hold exactly. The ingest seam
           (<code class="inl">src/lseg-ingest.js</code>) is a session interface:
-          <code class="inl">FakeLsegSession</code> runs the whole path with <b>no entitlement</b> (this demo),
-          and <code class="inl">RealLsegSession</code> fetches real fundamentals through
-          <code class="inl">lseg-data</code>. Set <code class="inl">LSEG_APP_KEY</code> (an entitled LSEG
-          Data Platform / Workspace app key), <code class="inl">pip install lseg-data</code>, and
+          <span class="ptip" tabindex="0" data-ptip="The synthetic session: deterministic fake data that runs the entire pipeline with no LSEG license. It's what this demo and the tests use."><code class="inl">FakeLsegSession</code></span>
+          runs the whole path with <b>no entitlement</b> (this demo),
+          and <span class="ptip" tabindex="0" data-ptip="The live session: same interface, but it fetches real fundamentals via lseg-data. Swapping it in is the only code change needed to attest genuine LSEG data."><code class="inl">RealLsegSession</code></span>
+          fetches real fundamentals through
+          <code class="inl">lseg-data</code>. Set <span class="ptip" tabindex="0" data-ptip="Your LSEG Data Platform / Workspace app key, entitled for these fields. Set it and I refuse to run without it, rather than returning nothing."><code class="inl">LSEG_APP_KEY</code></span>
+          (an entitled LSEG Data Platform / Workspace app key), <code class="inl">pip install lseg-data</code>, and
           <code class="inl">fintel lseg ingest --live</code> attests genuine LSEG data. <b>Nothing
           downstream changes</b> &mdash; the guard, grounding, and audit chain are identical.
         </div>
@@ -474,6 +500,57 @@ node bin/fintel.js <span class="p">lseg ingest IBM.N --period FY2023 --live</spa
           busy = true; img.src = IMG.menace; img.style.transform = 'scale(1.08)';
           setTimeout(function () { img.src = IMG.phin; img.style.transform = ''; busy = false; }, 1300);
         });
+      })();
+    </script>
+
+    <script>
+      // Phineas tooltips: a single floating speech bubble positioned near any
+      // [data-ptip] term on hover, focus, or tap.
+      (function () {
+        var tip = document.createElement('div');
+        tip.id = 'phin-tip';
+        tip.innerHTML =
+          '<div class="row"><img src="/assets/phineas/phin.png" alt="Phineas" /><span class="tip-text"></span></div><span class="tip-tail"></span>';
+        document.body.appendChild(tip);
+        var txt = tip.querySelector('.tip-text');
+        var tail = tip.querySelector('.tip-tail');
+        var current = null;
+
+        function show(el) {
+          var msg = el.getAttribute('data-ptip');
+          if (!msg) return;
+          txt.textContent = msg;
+          tip.classList.add('show');
+          var r = el.getBoundingClientRect();
+          var tw = tip.offsetWidth, th = tip.offsetHeight;
+          var left = Math.max(8, Math.min(r.left + r.width / 2 - tw / 2, window.innerWidth - tw - 8));
+          var above = r.top - th - 10;
+          if (above < 8) {
+            tip.classList.add('below');
+            tip.style.top = (r.bottom + 10) + 'px';
+          } else {
+            tip.classList.remove('below');
+            tip.style.top = above + 'px';
+          }
+          tip.style.left = left + 'px';
+          var tailLeft = Math.max(10, Math.min(r.left + r.width / 2 - left - 7, tw - 24));
+          tail.style.left = tailLeft + 'px';
+          current = el;
+        }
+        function hide() { tip.classList.remove('show'); current = null; }
+        function closest(e) { return e.target.closest ? e.target.closest('[data-ptip]') : null; }
+
+        document.addEventListener('mouseover', function (e) { var el = closest(e); if (el) show(el); });
+        document.addEventListener('mouseout', function (e) { var el = closest(e); if (el && el === current) hide(); });
+        document.addEventListener('focusin', function (e) { var el = closest(e); if (el) show(el); });
+        document.addEventListener('focusout', hide);
+        document.addEventListener('click', function (e) {
+          var el = closest(e);
+          if (el) { current === el ? hide() : show(el); }
+          else if (current) hide();
+        });
+        window.addEventListener('scroll', hide, true);
+        window.addEventListener('resize', hide);
       })();
     </script>
   </body>
