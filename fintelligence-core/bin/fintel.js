@@ -35,6 +35,7 @@ import {
     fundamentalsSnapshot,
     reconcileGrossProfit,
     reconcileStandardizedVsAsReported,
+    priceCloseSeries,
     LSEG_LOG_PATH,
     DEFAULT_RIC,
     DEFAULT_PERIOD,
@@ -407,7 +408,7 @@ async function main() {
             // A positional after the subcommand is the RIC; a second is the period.
             // Skip flags and the value each value-taking flag consumes, so e.g.
             // `--as-of 2022-06-01` does not leak its date into the RIC/period slots.
-            const VALUE_FLAGS = new Set(['--as-of', '--export', '--period', '--app-key']);
+            const VALUE_FLAGS = new Set(['--as-of', '--export', '--period', '--app-key', '--from', '--to']);
             const positional = [];
             for (let i = 1; i < rest.length; i++) {
                 const a = rest[i];
@@ -577,6 +578,28 @@ async function main() {
                     console.log('  compliance tags :', entry.complianceTags.join(' · '));
                     break;
                 }
+                case 'prices': {
+                    // Pricing at its own grain (finding #6): a time series from the
+                    // `prices` table, keyed by the quote PermID, not a fundamental.
+                    const fromIdx = rest.indexOf('--from');
+                    const toIdx = rest.indexOf('--to');
+                    const from = fromIdx >= 0 ? rest[fromIdx + 1] : null;
+                    const to = toIdx >= 0 ? rest[toIdx + 1] : null;
+                    const { rows, lineage, entry } = priceCloseSeries({ ric, from, to, signer });
+                    const span = from || to ? `  ${from ?? '…'}..${to ?? '…'}` : '';
+                    console.log(`\n${ric} — closing-price series (LSEG TR.PriceClose, get_history grain)${span}\n`);
+                    if (rows.length === 0) {
+                        console.log('  (no prices for this instrument/range)');
+                    } else {
+                        for (const r of rows) {
+                            console.log(`  ${r.price_date}  ${(Number(r.close) / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })} ${r.currency}`);
+                        }
+                    }
+                    console.log('\nProvenance');
+                    console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
+                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
+                    break;
+                }
                 case 'ingest': {
                     const live = rest.includes('--live');
                     const periodIdx = rest.indexOf('--period');
@@ -589,10 +612,12 @@ async function main() {
                         universe.push(rest[i]);
                     }
                     if (universe.length === 0) universe.push('IBM.N');
+                    // Fundamentals only — TR.PriceClose is a Pricing time series
+                    // (finding #6) and ingests via the history path, not here.
                     const fields = [
                         'TR.Revenue', 'TR.CostOfRevenueTotal', 'TR.GrossProfit', 'TR.OperatingIncome',
                         'TR.NetIncomeAfterTaxes', 'TR.TotalDebtOutstanding', 'TR.TotalAssetsReported',
-                        'TR.PriceClose', 'TR.CompanyMarketCap',
+                        'TR.CompanyMarketCap',
                     ];
                     const appKeyIdx = rest.indexOf('--app-key');
                     const appKey = appKeyIdx >= 0 ? rest[appKeyIdx + 1] : undefined;
@@ -635,6 +660,7 @@ async function main() {
                     console.log('  fintel lseg reconcile [RIC] [FY]     gross profit = Revenue − Cost of Revenue, attested (standardized integrity)');
                     console.log('  fintel lseg basis [RIC] [FY]         standardized (COA) gross profit vs as-reported, attested');
                     console.log('    add --as-of YYYY-MM-DD to fundamentals/reconcile/basis   read the vintage known at that knowledge date');
+                    console.log('  fintel lseg prices [RIC] [--from DATE] [--to DATE]   closing-price time series (own grain, quote PermID)');
                     console.log('  fintel lseg ingest [RIC...] [--period FY2024] [--live] [--app-key KEY]   land data via the ingest seam');
                     console.log('    --live needs an LSEG entitlement: set LSEG_APP_KEY (or pass --app-key) + install lseg-data');
                     console.log('  fintel lseg audit                    verify the LSEG audit chain');

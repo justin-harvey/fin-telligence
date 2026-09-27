@@ -10,14 +10,17 @@ import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { seedLseg, reconcileGrossProfit } from '../src/lseg.js';
+import { seedLseg, reconcileGrossProfit, priceCloseSeries } from '../src/lseg.js';
 import {
     FakeLsegSession,
     RealLsegSession,
     ingestFundamentals,
+    ingestPrices,
     DEFAULT_FIXTURE,
 } from '../src/lseg-ingest.js';
 
+// Fundamentals only — TR.PriceClose is a Pricing time series (finding #6) and is
+// ingested via the history path, not ingestFundamentals.
 const FIELDS = [
     'TR.Revenue',
     'TR.CostOfRevenueTotal',
@@ -26,7 +29,6 @@ const FIELDS = [
     'TR.NetIncomeAfterTaxes',
     'TR.TotalDebtOutstanding',
     'TR.TotalAssetsReported',
-    'TR.PriceClose',
     'TR.CompanyMarketCap',
 ];
 
@@ -96,6 +98,58 @@ test('ingest upserts an unseen instrument (a new RIC can be introduced)', () => 
     assert.equal(result.datapoints, 3);
     const { rows } = reconcileGrossProfit({ ric: 'MSFT.O', period: 'FY2024', dbPath: db, logPath: join(mkdtempSync(join(tmpdir(), 'l-')), 'a.jsonl') });
     assert.equal(rows[0].identity_gross_usd, rows[0].reported_gross_usd);
+});
+
+test('ingestFundamentals refuses a Pricing field — it belongs in the history path (P7)', () => {
+    const db = freshDb();
+    assert.throws(
+        () =>
+            ingestFundamentals({
+                session: new FakeLsegSession(),
+                universe: ['IBM.N'],
+                fields: ['TR.PriceClose'],
+                period: 'FY2024',
+                dbPath: db,
+            }),
+        (error) => /Pricing field/.test(error.message) && /ingestPrices/.test(error.message),
+    );
+});
+
+test('ingestPrices lands a close series at its own grain, readable by RIC (P7)', () => {
+    const db = freshDb();
+    const result = ingestPrices({
+        session: new FakeLsegSession(),
+        universe: ['IBM.N'],
+        fields: ['TR.PriceClose'],
+        start: '2024-04-01',
+        end: '2024-04-03',
+        dbPath: db,
+        source: 'FakeLsegSession history (test)',
+        retrievedAt: '2025-01-15',
+    });
+    assert.equal(result.quotes, 1);
+    assert.equal(result.datapoints, 3, 'three trading days landed');
+
+    // The series reads back through the guarded pipeline, keyed by the RIC's quote
+    // PermID, ending at the last close in the fixture.
+    const { rows } = priceCloseSeries({ ric: 'IBM.N', from: '2024-04-01', to: '2024-04-03', dbPath: db, logPath: join(mkdtempSync(join(tmpdir(), 'l-')), 'a.jsonl') });
+    assert.equal(rows.length, 3);
+    assert.equal(rows[0].price_date, '2024-04-01');
+    assert.equal(rows[rows.length - 1].close, 22_050);
+});
+
+test('ingestPrices refuses a non-Pricing field (mirror of the fundamentals guard, P7)', () => {
+    const db = freshDb();
+    assert.throws(
+        () =>
+            ingestPrices({
+                session: { getHistory: () => [{ Instrument: 'IBM.N', date: '2024-04-01', 'TR.Revenue': 1 }] },
+                universe: ['IBM.N'],
+                fields: ['TR.Revenue'],
+                dbPath: db,
+            }),
+        (error) => /not a Pricing field/.test(error.message) && /ingestFundamentals/.test(error.message),
+    );
 });
 
 test('the real session refuses to run without a credential', () => {

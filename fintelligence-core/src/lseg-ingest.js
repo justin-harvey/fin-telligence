@@ -57,9 +57,13 @@ export const LSEG_FETCH_SCRIPT = join(here, '..', 'scripts', 'lseg_fetch.py');
  * wide rows, omitting any datapoint the fixture does not hold.
  */
 export class FakeLsegSession {
-    /** @param {Record<string, Record<string, Record<string, number>>>} fixture */
-    constructor(fixture = DEFAULT_FIXTURE) {
+    /**
+     * @param {Record<string, Record<string, Record<string, number>>>} [fixture]  fundamentals fixture
+     * @param {Record<string, Array<{date: string, [field: string]: number|string}>>} [priceFixture]  history fixture
+     */
+    constructor(fixture = DEFAULT_FIXTURE, priceFixture = DEFAULT_PRICE_FIXTURE) {
         this.fixture = fixture;
+        this.priceFixture = priceFixture;
     }
 
     /**
@@ -78,6 +82,32 @@ export class FakeLsegSession {
                 if (values[field] != null) row[field] = values[field];
             }
             rows.push(row);
+        }
+        return rows;
+    }
+
+    /**
+     * The history path: one row per (instrument, trading day) for the requested
+     * pricing fields, optionally clipped to [start, end]. Mirrors `get_history`'s
+     * time-series shape — the grain a price actually lives at (finding #6).
+     *
+     * @param {string[]} universe  RICs to pull
+     * @param {string[]} fields     pricing field codes (e.g. TR.PriceClose)
+     * @param {{ start?: string, end?: string }} [options]
+     * @returns {object[]}
+     */
+    getHistory(universe, fields, { start = null, end = null } = {}) {
+        const rows = [];
+        for (const ric of universe) {
+            for (const point of this.priceFixture[ric] ?? []) {
+                if (start && point.date < start) continue;
+                if (end && point.date > end) continue;
+                const row = { Instrument: ric, date: point.date };
+                for (const field of fields) {
+                    if (point[field] != null) row[field] = point[field];
+                }
+                rows.push(row);
+            }
         }
         return rows;
     }
@@ -103,17 +133,38 @@ export class RealLsegSession {
      * @param {string} [config.pythonPath]  interpreter for the bridge (defaults to $LSEG_PYTHON or 'python3')
      * @param {string} [config.scriptPath]  path to lseg_fetch.py
      * @param {object} [config.parameters]  extra lseg-data field parameters
+     * @param {number} [config.chunkSize]   universe batch size (real sessions are
+     *   request-size / rate limited; the bridge chunks a large universe)
+     * @param {number} [config.maxRetries]  transport retries per chunk (backoff doubles)
+     * @param {number} [config.backoff]     initial backoff seconds for a transport retry
      */
     constructor({
         appKey = process.env.LSEG_APP_KEY,
         pythonPath = process.env.LSEG_PYTHON || 'python3',
         scriptPath = LSEG_FETCH_SCRIPT,
         parameters = {},
+        chunkSize = 100,
+        maxRetries = 3,
+        backoff = 0.5,
     } = {}) {
         this.appKey = appKey;
         this.pythonPath = pythonPath;
         this.scriptPath = scriptPath;
         this.parameters = parameters;
+        this.chunkSize = chunkSize;
+        this.maxRetries = maxRetries;
+        this.backoff = backoff;
+    }
+
+    /** Guard: RealLsegSession needs a credential; the fake one does not. */
+    requireCredential() {
+        if (!this.appKey) {
+            throw new Error(
+                'No LSEG credential. Set LSEG_APP_KEY (or pass { appKey }) — a valid LSEG Data Platform / ' +
+                    'Workspace app key entitled for these fields — then re-run. The synthetic FakeLsegSession ' +
+                    'needs no credential; RealLsegSession does. See mcp/README.md.',
+            );
+        }
     }
 
     /**
@@ -123,16 +174,57 @@ export class RealLsegSession {
      * @returns {object[]}
      */
     getData(universe, fields, { period } = {}) {
-        if (!this.appKey) {
-            throw new Error(
-                'No LSEG credential. Set LSEG_APP_KEY (or pass { appKey }) — a valid LSEG Data Platform / ' +
-                    'Workspace app key entitled for these fields — then re-run. The synthetic FakeLsegSession ' +
-                    'needs no credential; RealLsegSession does. See mcp/README.md.',
-            );
-        }
-        const request = JSON.stringify({ universe, fields, period, appKey: this.appKey, parameters: this.parameters });
+        this.requireCredential();
+        return this.run({
+            universe,
+            fields,
+            period,
+            appKey: this.appKey,
+            parameters: this.parameters,
+            chunkSize: this.chunkSize,
+            maxRetries: this.maxRetries,
+            backoff: this.backoff,
+        });
+    }
+
+    /**
+     * The history path: pricing is a time series at its own grain (finding #6), so
+     * it goes through the bridge's `get_history` mode (interval/start/end), not
+     * `get_data`. Returns one row per (instrument, trading day).
+     *
+     * @param {string[]} universe
+     * @param {string[]} fields  pricing field codes
+     * @param {{ interval?: string, start?: string, end?: string }} [options]
+     * @returns {object[]}
+     */
+    getHistory(universe, fields, { interval = 'daily', start = null, end = null } = {}) {
+        this.requireCredential();
+        return this.run({
+            universe,
+            fields,
+            mode: 'history',
+            interval,
+            start,
+            end,
+            appKey: this.appKey,
+            chunkSize: this.chunkSize,
+            maxRetries: this.maxRetries,
+            backoff: this.backoff,
+        });
+    }
+
+    /**
+     * Spawn the Python bridge with a JSON request on stdin and return its rows,
+     * surfacing the bridge's classified error `kind` on failure. Shared by the
+     * data and history paths so both honour the same credential, transport and
+     * entitlement handling.
+     *
+     * @param {object} payload  the bridge request
+     * @returns {object[]}
+     */
+    run(payload) {
         const res = spawnSync(this.pythonPath, [this.scriptPath], {
-            input: request,
+            input: JSON.stringify(payload),
             encoding: 'utf8',
             maxBuffer: 64 * 1024 * 1024,
         });
@@ -148,7 +240,17 @@ export class RealLsegSession {
         } catch {
             throw new Error(`LSEG bridge returned non-JSON output: ${(res.stdout || res.stderr || '').slice(0, 400)}`);
         }
-        if (out.error) throw new Error(`LSEG fetch failed: ${out.error}`);
+        if (out.error) {
+            // The bridge classifies the failure so a caller can branch: a
+            // permission_denied is an entitlement/provisioning problem, a
+            // not_found is a bad field/instrument in the request, and transport is
+            // retryable (the bridge already retried it). Surface the kind on the
+            // error rather than flattening every failure into one opaque string.
+            const kind = out.kind || 'unknown';
+            const error = new Error(`LSEG fetch failed (${kind}): ${out.error}`);
+            error.kind = kind;
+            throw error;
+        }
         return out.rows || [];
     }
 }
@@ -168,10 +270,22 @@ export const DEFAULT_FIXTURE = {
             'TR.NetIncomeAfterTaxes': 6_023_000_000,
             'TR.TotalDebtOutstanding': 54_000_000_000,
             'TR.TotalAssetsReported': 137_175_000_000,
-            'TR.PriceClose': 22_050,
             'TR.CompanyMarketCap': 204_000_000_000,
         },
     },
+};
+
+/**
+ * A default price fixture for the FakeLsegSession's history path: a short daily
+ * close series (USD cents) for IBM.N, so the pricing ingest path runs with no
+ * entitlement. Shape mirrors what `get_history` yields — one row per trading day.
+ */
+export const DEFAULT_PRICE_FIXTURE = {
+    'IBM.N': [
+        { date: '2024-04-01', 'TR.PriceClose': 22_140 },
+        { date: '2024-04-02', 'TR.PriceClose': 22_305 },
+        { date: '2024-04-03', 'TR.PriceClose': 22_050 },
+    ],
 };
 
 /**
@@ -223,12 +337,23 @@ export function ingestFundamentals({
             db.exec(readFileSync(LSEG_SCHEMA_PATH, 'utf8'));
         }
 
-        const knownFields = new Set(db.prepare('SELECT field_code FROM lseg_fields').all().map((r) => r.field_code));
+        const fieldCategory = new Map(
+            db.prepare('SELECT field_code, category FROM lseg_fields').all().map((r) => [r.field_code, r.category]),
+        );
         for (const field of fields) {
-            if (!knownFields.has(field)) {
+            if (!fieldCategory.has(field)) {
                 throw new Error(
                     `Unknown LSEG field code "${field}". Resolve and validate it via lseg-mcp ` +
                         '(search_data_dictionary / validate_lseg_formula) and add it to lseg_fields before ingesting.',
+                );
+            }
+            // Pricing is a time series at its own grain (finding #6): it must not
+            // land in `fundamentals` as a per-period value. Route it through the
+            // history path (ingestPrices / RealLsegSession.getHistory) instead.
+            if (fieldCategory.get(field) === 'Pricing') {
+                throw new Error(
+                    `"${field}" is a Pricing field — a time series, not a per-period fundamental. ` +
+                        'Ingest it with ingestPrices (get_history grain), not ingestFundamentals (finding #6).',
                 );
             }
         }
@@ -240,7 +365,9 @@ export function ingestFundamentals({
         const currencyOf = new Map(db.prepare('SELECT ric, currency FROM instruments').all().map((r) => [r.ric, r.currency]));
         const insertOrg = db.prepare('INSERT OR IGNORE INTO organizations (org_permid, name, sector) VALUES (?, ?, NULL)');
         const upsertInstrument = db.prepare(
-            "INSERT OR IGNORE INTO instruments (ric, org_permid, isin, exchange, currency) VALUES (?, ?, NULL, '', 'USD')",
+            // A fundamentals-only ingest knows the org, not the quote — quote_permid
+            // stays NULL until a pricing ingest fills it (nullable UNIQUE allows it).
+            "INSERT OR IGNORE INTO instruments (ric, org_permid, quote_permid, isin, exchange, currency) VALUES (?, ?, NULL, NULL, '', 'USD')",
         );
         const insertFact = db.prepare(
             'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, scale, periodicity, reporting_state, knowledge_date, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
@@ -280,6 +407,119 @@ export function ingestFundamentals({
         }
 
         return { instruments: seenInstruments.size, fields: fields.length, datapoints, rows: wideRows };
+    } finally {
+        db.close();
+    }
+}
+
+/**
+ * Land an LSEG price series into the warehouse (finding #6: pricing at its own
+ * grain). The sibling of ingestFundamentals for time-series pricing: it pulls the
+ * requested Pricing fields for the universe over [start, end] via
+ * `session.getHistory`, and inserts one `prices` row per (quote, field, trading
+ * day), keyed by the stable **quote** PermID rather than the org. Only real
+ * Pricing-category fields may land here (the mirror of the fundamentals guard).
+ * Idempotent per (quote, field, date) via INSERT OR REPLACE, so re-pulling a day
+ * overwrites rather than duplicating.
+ *
+ * @param {object} params
+ * @param {{ getHistory: Function }} params.session
+ * @param {string[]} params.universe            RICs to pull
+ * @param {string[]} params.fields              Pricing field codes (e.g. TR.PriceClose)
+ * @param {string} [params.interval]            get_history interval (default 'daily')
+ * @param {string|null} [params.start]          inclusive ISO start date
+ * @param {string|null} [params.end]            inclusive ISO end date
+ * @param {string} [params.dbPath]
+ * @param {string} [params.source]
+ * @param {string} [params.retrievedAt]
+ * @returns {{ quotes: number, fields: number, datapoints: number, rows: object[] }}
+ */
+export function ingestPrices({
+    session,
+    universe,
+    fields,
+    interval = 'daily',
+    start = null,
+    end = null,
+    dbPath = LSEG_DB_PATH,
+    source = 'LSEG Workspace (lseg-data get_history)',
+    retrievedAt = new Date().toISOString().slice(0, 10),
+}) {
+    if (!session || typeof session.getHistory !== 'function') {
+        throw new Error('ingestPrices needs a session with a getHistory(universe, fields, options) method.');
+    }
+    if (!Array.isArray(universe) || universe.length === 0) throw new Error('ingestPrices needs a non-empty universe.');
+    if (!Array.isArray(fields) || fields.length === 0) throw new Error('ingestPrices needs a non-empty fields list.');
+
+    const rows = session.getHistory(universe, fields, { interval, start, end });
+
+    const db = new DatabaseSync(dbPath);
+    try {
+        db.exec('PRAGMA foreign_keys = ON');
+        const hasTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='prices'").get();
+        if (!hasTable) {
+            if (!existsSync(LSEG_SCHEMA_PATH)) throw new Error(`LSEG schema not found at ${LSEG_SCHEMA_PATH}`);
+            db.exec(readFileSync(LSEG_SCHEMA_PATH, 'utf8'));
+        }
+
+        const fieldCategory = new Map(
+            db.prepare('SELECT field_code, category FROM lseg_fields').all().map((r) => [r.field_code, r.category]),
+        );
+        for (const field of fields) {
+            if (!fieldCategory.has(field)) {
+                throw new Error(
+                    `Unknown LSEG field code "${field}". Validate via lseg-mcp and add it to lseg_fields before ingesting.`,
+                );
+            }
+            if (fieldCategory.get(field) !== 'Pricing') {
+                throw new Error(
+                    `"${field}" is not a Pricing field — ingest it with ingestFundamentals, not ingestPrices (finding #6).`,
+                );
+            }
+        }
+
+        const quoteOf = new Map(db.prepare('SELECT ric, quote_permid FROM instruments').all().map((r) => [r.ric, r.quote_permid]));
+        const currencyOf = new Map(db.prepare('SELECT ric, currency FROM instruments').all().map((r) => [r.ric, r.currency]));
+        const insertOrg = db.prepare('INSERT OR IGNORE INTO organizations (org_permid, name, sector) VALUES (?, ?, NULL)');
+        const insertInstrument = db.prepare(
+            "INSERT OR IGNORE INTO instruments (ric, org_permid, quote_permid, isin, exchange, currency) VALUES (?, ?, ?, NULL, '', 'USD')",
+        );
+        const setQuote = db.prepare('UPDATE instruments SET quote_permid = ? WHERE ric = ? AND quote_permid IS NULL');
+        const insertPrice = db.prepare(
+            'INSERT OR REPLACE INTO prices (quote_permid, field_code, price_date, value, currency, scale, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?)',
+        );
+
+        const seenQuotes = new Set();
+        let datapoints = 0;
+        for (const row of rows) {
+            const ric = row.Instrument;
+            const date = row.date;
+            if (!ric || !date) continue;
+            let quotePermid = quoteOf.get(ric);
+            if (!quotePermid) {
+                // Real get_history carries the quote/instrument PermID; the
+                // synthetic seam does not, so mint a clearly-marked placeholder to
+                // enrich later — same PENDING discipline as the fundamentals path.
+                quotePermid = `QUOTE-PENDING:${ric}`;
+                if (!currencyOf.has(ric)) {
+                    insertOrg.run(`PENDING:${ric}`, ric);
+                    insertInstrument.run(ric, `PENDING:${ric}`, quotePermid);
+                    currencyOf.set(ric, 'USD');
+                } else {
+                    // Known RIC (e.g. from a prior fundamentals ingest) but no quote yet.
+                    setQuote.run(quotePermid, ric);
+                }
+                quoteOf.set(ric, quotePermid);
+            }
+            seenQuotes.add(quotePermid);
+            for (const field of fields) {
+                const value = row[field];
+                if (value == null) continue;
+                insertPrice.run(quotePermid, field, date, value, currencyOf.get(ric) ?? 'USD', 0, retrievedAt, source);
+                datapoints += 1;
+            }
+        }
+        return { quotes: seenQuotes.size, fields: fields.length, datapoints, rows };
     } finally {
         db.close();
     }

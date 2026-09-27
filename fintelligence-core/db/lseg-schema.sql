@@ -44,17 +44,22 @@ CREATE TABLE organizations (
 -- The QUOTE / listing, keyed by RIC (Reuters Instrument Code). A RIC identifies
 -- an instrument *at a venue* (e.g. 'IBM.N' is IBM on the NYSE) and is **mutable**:
 -- a ticker rename, an exchange move, or an M&A event can reassign it. So here a
--- RIC is an **alias** onto the stable organization, never the identity of the
--- entity's fundamentals. (The stable quote-level key for pricing is the quote/
--- instrument PermID; modelling pricing at its own grain is the pricing-grain
--- follow-up — see finding #6 in LSEG-ARCHITECTURE-REVIEW.md — so it is not a
--- column here yet.)
+-- RIC is an **alias** onto two stable PermIDs:
+--   org_permid   — the ISSUER (entity), for entity-level fundamentals.
+--   quote_permid — the QUOTE/instrument PermID, the stable quote-level key a
+--                  price keys on (a price belongs to a listing at a venue, not to
+--                  the issuer). This is the deferred key from finding #1, landed
+--                  now with the pricing-grain fix (finding #6): pricing lives in
+--                  its own `prices` table keyed by quote_permid, not in
+--                  `fundamentals`. Quote PermIDs must be real & validated before a
+--                  live ingest, like the RICs / Org PermIDs / TR.* codes.
 CREATE TABLE instruments (
-    ric        TEXT PRIMARY KEY,     -- Reuters Instrument Code — MUTABLE alias (instrument × venue)
-    org_permid TEXT NOT NULL REFERENCES organizations(org_permid),
-    isin       TEXT,                 -- ISIN, where applicable
-    exchange   TEXT NOT NULL,        -- listing venue
-    currency   TEXT NOT NULL         -- reporting/listing currency
+    ric          TEXT PRIMARY KEY,   -- Reuters Instrument Code — MUTABLE alias (instrument × venue)
+    org_permid   TEXT NOT NULL REFERENCES organizations(org_permid),
+    quote_permid TEXT UNIQUE,        -- LSEG quote/instrument PermID — stable QUOTE-level key (pricing)
+    isin         TEXT,               -- ISIN, where applicable
+    exchange     TEXT NOT NULL,      -- listing venue
+    currency     TEXT NOT NULL       -- reporting/listing currency
 );
 
 CREATE INDEX idx_instr_org ON instruments(org_permid);
@@ -143,3 +148,28 @@ CREATE INDEX idx_fund_field      ON fundamentals(field_code);
 -- Supports the latest-vintage-as-of lookup: MAX(knowledge_date) per (org, field,
 -- period, basis) at or before an as-of cutoff.
 CREATE INDEX idx_fund_bitemporal ON fundamentals(org_permid, field_code, period, basis, knowledge_date);
+
+-- Pricing at its OWN grain (finding #6). A price is a TIME SERIES, not a
+-- per-period fundamental: TR.PriceClose is retrieved with `get_history`
+-- (SDate/EDate/interval) as one value per trading day, and it keys on the stable
+-- QUOTE-level identifier (`quote_permid`) because a price belongs to a listing at
+-- a venue, not to the issuer entity the way fundamentals do. Storing a close in
+-- `fundamentals` (a value per fiscal period) was the wrong grain and left it dead
+-- weight; this table is the right one, and the fundamentals path no longer
+-- carries pricing (the ingest seam refuses a Pricing-category field with a
+-- pointer here). `value` is an INTEGER in the field's native unit (a close in USD
+-- cents), before `scale`, mirroring the float-free discipline of `fundamentals`.
+CREATE TABLE prices (
+    id           INTEGER PRIMARY KEY,
+    quote_permid TEXT    NOT NULL REFERENCES instruments(quote_permid),
+    field_code   TEXT    NOT NULL REFERENCES lseg_fields(field_code),
+    price_date   TEXT    NOT NULL,   -- ISO-8601 trading date
+    value        INTEGER NOT NULL,   -- in lseg_fields.unit (e.g. usd_cents), before `scale`
+    currency     TEXT    NOT NULL,
+    scale        INTEGER NOT NULL DEFAULT 0,
+    retrieved_at TEXT    NOT NULL,
+    source       TEXT    NOT NULL,
+    UNIQUE (quote_permid, field_code, price_date)
+);
+
+CREATE INDEX idx_prices_quote ON prices(quote_permid, field_code, price_date);

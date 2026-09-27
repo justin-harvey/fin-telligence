@@ -24,9 +24,11 @@ on a RIC. A RIC is a *quote* id (instrument × venue) and is **mutable** — a
 ticker rename, exchange move, or M&A event can reassign it — so in the schema it
 is a **mutable alias** onto the organization (`instruments.ric → organizations.org_permid`),
 never the identity of the numbers. Reads accept the familiar RIC and resolve it
-to the Org PermID before touching `fundamentals`. (The stable quote-level key for
-*pricing* is the quote/instrument PermID; modelling pricing at its own grain is a
-separate follow-up — finding #6 — so it is not a column yet.)
+to the Org PermID before touching `fundamentals`. The stable quote-level key for
+*pricing* is the **quote/instrument PermID** (`instruments.quote_permid`): a price
+belongs to a listing at a venue, so it keys on the quote, not the org. Those quote
+PermIDs are **synthetic placeholders** here (`QUOTE-PENDING:<RIC>`) — validate the
+real ones via lseg-mcp before a live ingest, exactly like the RICs / Org PermIDs.
 - **Synthetic:** every **value** in `fundamentals`. No LSEG entitlement is
   bundled with this repo, so the datapoints are fabricated — authored so the
   accounting identities hold exactly (e.g. Gross Profit = Revenue − Cost of
@@ -149,6 +151,18 @@ zero. (Synthetic seed: IBM.N **FY2021** carries an original vintage known
 | `TR.TotalAssetsReported` | Total Assets, Reported | Balance Sheet | `ATOT` | usd |
 | `TR.PriceClose` | Closing price (daily) | Pricing (extended dict) | — | usd_cents |
 | `TR.CompanyMarketCap` | Market capitalisation | Reference (extended dict) | — | usd |
+
+**Pricing at its own grain (finding #6).** `TR.PriceClose` is a *time series*, not
+a per-period fundamental, so it lives in the `prices` table (one row per quote ×
+trading day, keyed by `quote_permid`) and is retrieved with `get_history`
+(SDate/EDate/interval), not `get_data`. The ingest seam enforces the split: a
+Pricing-category field is refused by `ingestFundamentals` and lands via
+`ingestPrices`; a non-pricing field is refused by `ingestPrices`. Read it with
+`priceCloseSeries` / `fintel lseg prices`. `TR.CompanyMarketCap` (also a daily
+series in reality) is left in `fundamentals` for now — a candidate for the same
+treatment. The Python bridge (`scripts/lseg_fetch.py`) classifies failures into
+`permission_denied` / `not_found` / `transport` / `bad_request` / `dependency`,
+opens one session, chunks a large universe, and retries transport with backoff.
 
 Instruments in the seed: `IBM.N` (International Business Machines, NYSE),
 `AAPL.O` (Apple, Nasdaq), `VOD.L` (Vodafone Group, LSE). Reporting period

@@ -139,6 +139,18 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
    - **Batching / rate limits / session lifecycle** — one `get_data` for the whole universe×fields,
      and a **fresh Python session opened per ingest call** (spawn-per-call). Real Workspace sessions
      are heavy and concurrency-limited; large universes need chunking + backoff + a long-lived session.
+   **[FIXED 2026-09-26 — P7]** (a) The bridge now **classifies** every failure into
+   `permission_denied` / `not_found` / `transport` / `bad_request` / `dependency` (status-code +
+   message heuristics; permission before not-found) and returns `{error, kind}`; `RealLsegSession`
+   surfaces `kind` on the thrown error. (b) **Pricing moved to its own grain**: new `quote_permid` on
+   `instruments` (the deferred P4 quote key) + a `prices` table (one row per quote × trading day),
+   retrieved via `get_history`; `TR.PriceClose` removed from `fundamentals`; `ingestFundamentals`
+   refuses a Pricing field and `ingestPrices` refuses a non-Pricing one; read via `priceCloseSeries` /
+   `fintel lseg prices`. (c) **Batching/session**: the bridge opens one session, chunks the universe,
+   and retries only transport errors with exponential backoff (tunable via `RealLsegSession`
+   `chunkSize`/`maxRetries`/`backoff`). Bridge is still exercised only against `FakeLsegSession`
+   (no live entitlement); the JS-observable parts are tested (160 green). `TR.CompanyMarketCap` left
+   in `fundamentals` as a noted candidate for the same pricing-grain treatment.
 
 7. **Licensing / redistribution / caching compliance.** The design persists LSEG data to a snapshot
    warehouse. Inside the LSEG unit this is a real question: display vs non-display usage, caching
@@ -172,7 +184,7 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
 | ~~P4~~ ✅ | **PermID identifier model (#1)** — DONE 2026-09-25 | Add `org_permid` (fundamentals) / quote PermID (pricing) as stable keys; RIC becomes an alias column. Migrate schema + seed + queries. | M | Med |
 | ~~P5~~ ✅ | **Field parameters on the grain (#2)** — DONE 2026-09-25 | Add `currency`, `scale`, `periodicity`, `reporting_state` to `fundamentals`; enforce single-currency in reconciliations (FX guard). | M | Med |
 | ~~P6~~ ✅ | **Bitemporal keys (#5)** — DONE 2026-09-26 | Added `knowledge_date` (transaction time) distinct from `period`; restatements version (new row, not overwrite); reads take an `asOf` picking exactly one vintage per (org,field,period,basis); reproducibility is restatement-aware (`verify()` intact across a restatement). CLI `--as-of`. | M | Med |
-| P7 | **`lseg-data` ops (#6)** | Entitlement-aware errors in `lseg_fetch.py`; move pricing to `get_history` at its own grain; batching + backoff + longer-lived session. | M | Med |
+| ~~P7~~ ✅ | **`lseg-data` ops (#6)** — DONE 2026-09-26 | Entitlement-aware error `kind` classification in `lseg_fetch.py`; pricing moved to `get_history` at its own grain (`quote_permid` + `prices` table, ingest guards both ways); one session + universe chunking + transport backoff. | M | Med |
 | P8 | **Licensing/redistribution sign-off (#7)** | Usage tagging + retention/TTL; confirm caching/redistribution terms before a live key. | S (mostly non-code) | — |
 
 **Quickest wins with no demo risk: P1 and P2.** Most interview-valuable: **P3**.

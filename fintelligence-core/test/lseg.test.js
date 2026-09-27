@@ -17,6 +17,7 @@ import {
     fundamentalsSnapshot,
     reconcileGrossProfit,
     reconcileStandardizedVsAsReported,
+    priceCloseSeries,
     LSEG_ALLOWED_TABLES,
     LSEG_ALLOWED_COLUMNS,
 } from '../src/lseg.js';
@@ -44,10 +45,12 @@ test('the lseg seed is deterministic in shape', () => {
     assert.equal(result.organizations, 3);
     assert.equal(result.instruments, 3);
     assert.equal(result.fields, 9);
-    // 36 standardized (COA) datapoints + 12 as-reported gross-profit-block rows
-    // (Revenue/Cost/Gross × 4 instrument-periods) + 6 bitemporal restatement rows
-    // (IBM.N FY2021 gross-profit block × 2 vintages).
-    assert.equal(result.datapoints, 54);
+    // 32 standardized (COA) datapoints (8 fundamentals × 4 instrument-periods, with
+    // TR.PriceClose now in `prices`, not `fundamentals`) + 12 as-reported
+    // gross-profit-block rows + 6 bitemporal restatement rows (IBM.N FY2021 × 2).
+    assert.equal(result.datapoints, 50);
+    // Pricing at its own grain: 3 daily closes × 3 instruments.
+    assert.equal(result.prices, 9);
 });
 
 test('the IBM.N FY2023 snapshot resolves each concept to its blessed LSEG field', () => {
@@ -250,6 +253,36 @@ test('an as-of read reproduces its hash and a restatement is not read as tamperi
     assert.equal(restated.lineage.asOf, null);
 
     assert.ok(verify(logPath).ok, 'the audit chain verifies intact across the restatement');
+});
+
+test('pricing lives at its own grain, keyed by the quote PermID, not in fundamentals (P7)', () => {
+    // TR.PriceClose is a time series in `prices`, not a per-period fundamental.
+    const db = new DatabaseSync(DB_PATH);
+    const fundCols = db.prepare('PRAGMA table_info(fundamentals)').all().map((c) => c.name);
+    assert.ok(!fundCols.includes('close'), 'fundamentals must not carry pricing');
+    // No TR.PriceClose row ever landed in fundamentals.
+    const priceInFund = db.prepare("SELECT COUNT(*) n FROM fundamentals WHERE field_code = 'TR.PriceClose'").get().n;
+    assert.equal(priceInFund, 0, 'TR.PriceClose must not be a fundamental');
+    // instruments now carries the stable quote PermID (the deferred P4 key).
+    const instrCols = db.prepare('PRAGMA table_info(instruments)').all().map((c) => c.name);
+    assert.ok(instrCols.includes('quote_permid'), 'instruments should carry the quote PermID');
+    db.close();
+
+    // The series reads through the guarded pipeline, ordered by date, ending at the
+    // close previously (mis)stored as the fundamental — so nothing regressed.
+    const { rows } = priceCloseSeries({ ric: 'IBM.N', dbPath: DB_PATH, logPath: freshLog() });
+    assert.equal(rows.length, 3);
+    assert.deepEqual(rows.map((r) => r.price_date), ['2024-03-26', '2024-03-27', '2024-03-28']);
+    assert.equal(rows[rows.length - 1].close, 16_355);
+    assert.equal(rows[0].currency, 'USD');
+});
+
+test('the price series honours an inclusive date range and reproduces its hash (P7)', () => {
+    const a = priceCloseSeries({ ric: 'IBM.N', from: '2024-03-27', to: '2024-03-28', dbPath: DB_PATH, logPath: freshLog() });
+    assert.equal(a.rows.length, 2);
+    assert.equal(a.rows[0].price_date, '2024-03-27');
+    const b = priceCloseSeries({ ric: 'IBM.N', from: '2024-03-27', to: '2024-03-28', dbPath: DB_PATH, logPath: freshLog() });
+    assert.equal(a.lineage.resultHash, b.lineage.resultHash);
 });
 
 test('an attestation is recorded with provenance and compliance tags', () => {

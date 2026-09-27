@@ -1,14 +1,15 @@
-# LSEG hardening — handoff (continue from P7)
+# LSEG hardening — handoff (continue from P8)
 
-_Self-contained. Written 2026-09-26. Base release `ddb9bb9` on `main`; **P6 is
-implemented in the working tree, 155 tests green, NOT yet committed** (repo
-`justin-harvey/fin-telligence`, clone `/home/nah/Claudia/fin-telligence`)._
+_Self-contained. Written 2026-09-26. P1–P6 shipped on `main` (P6 = commit
+`faaf60e`); **P7 is implemented in the working tree, 160 tests green, NOT yet
+committed** (repo `justin-harvey/fin-telligence`, clone
+`/home/nah/Claudia/fin-telligence`)._
 
 This picks up where `LSEG-ARCHITECTURE-REVIEW.md` (the master findings + backlog)
-left off. **P1–P6 are done and tested** (P1–P5 shipped in `ddb9bb9`; P6 sits
-uncommitted in the working tree — commit/push when ready). Remaining: **P7, P8**
-plus a few cleanup items. Read the review for the full findings; this doc is the
-"what's true now + do next" for a fresh session.
+left off. **P1–P7 are done and tested** (P1–P6 shipped; P7 sits uncommitted in the
+working tree — commit/push when ready). Remaining: **P8** plus a few cleanup
+items. Read the review for the full findings; this doc is the "what's true now +
+do next" for a fresh session.
 
 ---
 
@@ -50,7 +51,7 @@ plus a few cleanup items. Read the review for the full findings; this doc is the
 
 ---
 
-## What P1–P6 changed (so you don't re-derive it)
+## What P1–P7 changed (so you don't re-derive it)
 
 | # | What | Key surface |
 |---|------|-------------|
@@ -60,6 +61,7 @@ plus a few cleanup items. Read the review for the full findings; this doc is the
 | P4 | **PermID identifier model**: new `organizations` table keyed by real Org PermID; `instruments.ric` demoted to a mutable alias (`org_permid` FK); `fundamentals` re-keyed `ric` → `org_permid`; reads resolve RIC→org via `resolveOrgPermid` | `lseg-schema.sql`, `lseg.js`, `lseg-ingest.js`, `bin/fintel.js` |
 | P5 | **Field parameters** `scale`/`periodicity`/`reporting_state` on the grain; **FX guard**: reconciliations refuse (EXCEPTION) on mixed currency/scale/periodicity via `COUNT(DISTINCT …)` variant checks | `lseg-schema.sql`, `lseg.js`, `controls.js`, `lseg-ingest.js`, `bin/fintel.js` |
 | P6 | **Bitemporal** `knowledge_date` (transaction time) on the grain; restatements version (new row, not overwrite); reads take `asOf` (default `9999-12-31`=latest) injecting a correlated `MAX(knowledge_date)<=asOf` subquery → exactly one vintage per (org,field,period,basis), no double-count, pre-vintage→N/A; CLI `--as-of`; `verify()` intact across a restatement. Seed adds IBM.N FY2021 original+restated | `lseg-schema.sql`, `lseg.js`, `lseg-ingest.js`, `bin/fintel.js`, `db/lseg-anchor.md`, `test/lseg.test.js` |
+| P7 | **`lseg-data` ops.** (a) Bridge classifies failures → `{error, kind}` (`permission_denied`/`not_found`/`transport`/`bad_request`/`dependency`), surfaced on `RealLsegSession` errors. (b) **Pricing at its own grain**: `quote_permid` on `instruments` + new `prices` table (quote × trading day) via `get_history`; `TR.PriceClose` out of `fundamentals`; `ingestFundamentals` refuses Pricing fields, `ingestPrices` refuses non-Pricing; read via `priceCloseSeries` / `fintel lseg prices`. (c) One session + universe chunking + transport backoff (`RealLsegSession` `chunkSize`/`maxRetries`/`backoff`) | `scripts/lseg_fetch.py`, `lseg-schema.sql`, `lseg.js`, `lseg-ingest.js`, `bin/fintel.js`, `db/lseg-anchor.md`, `test/lseg.test.js`, `test/lseg-ingest.test.js` |
 
 **Real Org PermIDs (validate before real ingest, like RICs/TR.* codes):**
 IBM `4295904307`, Apple `4295905573`, Vodafone Group `4295896661`.
@@ -89,6 +91,13 @@ IBM `4295904307`, Apple `4295905573`, Vodafone Group `4295896661`.
    double-counted across vintages. Default `asOf` is the fixed sentinel
    `AS_OF_LATEST` (`9999-12-31`), never `today` — a result hash must not drift
    with the wall clock. New `fundamentals` rows must set `knowledge_date`.
+9. **Pricing never goes in `fundamentals`.** A Pricing-category field is a time
+   series in `prices` (keyed by `quote_permid`), landed via `ingestPrices` /
+   `get_history` and read via `priceCloseSeries`. `ingestFundamentals` refuses a
+   Pricing field and `ingestPrices` refuses a non-Pricing one — keep both guards.
+   `quote_permid` is a synthetic `QUOTE-PENDING:<RIC>` placeholder; validate real
+   ones before a live ingest. Any new query on `prices` needs its columns in
+   `LSEG_ALLOWED_COLUMNS.prices` or the guard refuses it.
 
 ---
 
@@ -118,36 +127,77 @@ calendarization — the `period` label already carries valid time, and faking
 precise period-end dates per issuer (IBM Dec, Apple Sep, Vodafone Mar) would
 overstate what's modelled. Note it if a future control needs true period-end dates.
 
-### P7 — `lseg-data` operational realities (#6)  · M effort · Med risk · **do next**
+### P7 — `lseg-data` operational realities (#6)  · ✅ DONE 2026-09-26 (uncommitted)
 
-Only meaningful against a live entitlement, but the seam should be honest.
-- **Entitlement-aware errors** in `scripts/lseg_fetch.py`: distinguish
-  permission-denied vs not-found vs transport, rather than the current generic
-  `get_data` catch.
-- **Pricing is the wrong grain.** `TR.PriceClose` is a time series
-  (`SDate/EDate/Frq`) via `get_history`, not a per-period fundamental. Move it to
-  its own grain. **This is where the deferred quote/instrument PermID from P4
-  lands** — pricing keys on the quote, not the org (add `quote_permid` to
-  `instruments` then).
-- **Batching / rate limits / session lifecycle.** Today one `get_data` for the
-  whole universe×fields and a fresh Python session per ingest call. Real Workspace
-  sessions are heavy and concurrency-limited: chunk the universe, add backoff, and
-  hold a longer-lived session.
+(a) **Entitlement-aware errors.** `scripts/lseg_fetch.py` classifies every failure
+into `permission_denied` / `not_found` / `transport` / `bad_request` / `dependency`
+(HTTP status + message heuristics; permission checked before not-found so a 403 on
+an unentitled field isn't misread as "no such field") and returns `{error, kind}`;
+`RealLsegSession` attaches `kind` to the thrown error.
 
-### P8 — Licensing / redistribution sign-off (#7)  · S (mostly non-code)
+(b) **Pricing at its own grain.** New `quote_permid` on `instruments` (the deferred
+P4 quote key) + a `prices` table (one row per quote × trading day) retrieved via
+`get_history`. `TR.PriceClose` removed from `fundamentals` (and from the seed /
+ingest field lists). `ingestFundamentals` refuses a Pricing field; `ingestPrices`
+(new) lands the series and refuses a non-Pricing field. `FakeLsegSession.getHistory`
++ `RealLsegSession.getHistory` mirror the data path. Read via `priceCloseSeries` /
+`fintel lseg prices [RIC] [--from DATE] [--to DATE]`. Quote PermIDs are synthetic
+`QUOTE-PENDING:<RIC>` placeholders — validate before a live run.
+
+(c) **Batching / session lifecycle.** The bridge opens one session, chunks the
+universe (`chunkSize`), and retries ONLY transport-classified errors with
+exponential backoff (`maxRetries`/`backoff`); permission/not-found fail fast. All
+three are tunable via the `RealLsegSession` constructor and passed in the request.
+
+Tested (160 green): pricing lives outside `fundamentals` and reads by RIC→quote;
+range + reproducibility; both ingest guards; the Python classifier/chunking were
+spot-checked directly (`python3`), but the bridge is still only run against
+`FakeLsegSession` — no live entitlement here, so confirm the `get_history` mapping
+via lseg-mcp before a live pull. `TR.CompanyMarketCap` (also a daily series in
+reality) left in `fundamentals` as a noted candidate for the same treatment.
+
+### P8 — Licensing / redistribution sign-off (#7)  · S (mostly non-code) · **do next**
 
 The design persists LSEG data to a snapshot warehouse. Before a live key: confirm
 display vs non-display usage, caching TTLs, redistribution terms. Add usage
 tagging + retention/TTL controls on the warehouse. Largely a policy/sign-off task.
+
+### Docs backlog — teach-from-zero root README (requested 2026-09-26)
+
+Rewrite the GitHub root `README.md` to be *annoyingly informative* for a reader
+who has never heard of LSEG. It currently sells the verify-or-refuse thesis but
+mentions LSEG only in passing and teaches none of the vocabulary. It must:
+
+- **Glossary, plain English.** LSEG (London Stock Exchange Group, formerly
+  Refinitiv); **RIC** (Reuters Instrument Code — a *quote* id, instrument × venue,
+  mutable); **Org PermID** vs **quote PermID** (permid.org — stable entity key vs
+  stable quote key); **TR.\*** field codes (e.g. `TR.Revenue`); **COA** (Chart of
+  Accounts, LSEG's standardized model); **SGRP/SREV/SCOR** (Gross Profit / Revenue
+  / Cost of Revenue COA codes); **standardized vs as-reported** basis; the field
+  parameters **Curn / Scale / Period / periodicity / ReportingState**; **get_data**
+  (per-period fundamentals) vs **get_history** (time-series pricing); **bitemporal**
+  (period = valid time vs `knowledge_date` = transaction time); **entitlement**.
+- **How it works.** The vendor-data pipeline (field code → `lseg-data` → snapshot
+  warehouse → guarded/grounded/hash-chained reads); the two reconciliations and
+  what each *actually* proves (standardized integrity/tamper vs standardized-vs-
+  as-reported data check); the FX guard, coverage→N/A, bitemporal as-of read, and
+  pricing at its own grain.
+- **Where the value is.** Verify-or-refuse over *vendor* market data for
+  regulated/audit use; provenance down to the exact `TR.*` code; tamper-evident
+  audit; reproducibility that survives a restatement.
+- Keep the claim discipline explicit (real identifiers, synthetic values,
+  labelled). Fix the stale test badge (now **160**). Consider an annotated CLI
+  transcript as a worked example. (Tracked as task in the working session.)
 
 ### Cleanup (opportunistic, from the review's "Redundant/over-engineered")
 
 - **Two sources of unit truth**: `lseg_fields.unit` vs the registry `unit` can
   drift — keep the dictionary authoritative.
 - **Seeded-but-unused fields**: `OperatingIncome`, `NetIncomeAfterTaxes`,
-  `TotalDebtOutstanding`, `TotalAssetsReported`, `PriceClose`, `CompanyMarketCap`
-  are only lightly exercised — either add controls that use them (balance-sheet
-  identity, leverage, margins) or trim.
+  `TotalDebtOutstanding`, `TotalAssetsReported`, `CompanyMarketCap` are only
+  lightly exercised — either add controls that use them (balance-sheet identity,
+  leverage, margins) or trim. (`PriceClose` now lives in `prices` at its own grain,
+  read by `priceCloseSeries`; `CompanyMarketCap` is a candidate to follow it.)
 - **Per-row constant duplication**: `source`/`currency`/`scale`/`periodicity`/
   `reporting_state` are constant per batch in the seed — fine now; normalise if it
   grows.
@@ -156,7 +206,7 @@ tagging + retention/TTL controls on the warehouse. Largely a policy/sign-off tas
 
 ## Pointers
 
-- `LSEG-ARCHITECTURE-REVIEW.md` — master findings + backlog (P1–P6 checked off).
+- `LSEG-ARCHITECTURE-REVIEW.md` — master findings + backlog (P1–P7 checked off).
 - `fintelligence-core/db/lseg-anchor.md` — claim discipline, validated field/COA
   table, identifier model, the two reconciliations + FX guard.
 - `fintelligence-core/mcp/README.md` — lseg-mcp workflow + credential path

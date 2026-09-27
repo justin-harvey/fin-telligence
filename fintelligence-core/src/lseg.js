@@ -63,14 +63,15 @@ export const FEED_SOURCE =
     'LSEG synthetic snapshot (no entitlement) — validate TR.* field codes via lseg-mcp before real ingest';
 
 /** Tables an LSEG query may read. */
-export const LSEG_ALLOWED_TABLES = Object.freeze(['organizations', 'instruments', 'lseg_fields', 'fundamentals']);
+export const LSEG_ALLOWED_TABLES = Object.freeze(['organizations', 'instruments', 'lseg_fields', 'fundamentals', 'prices']);
 
 /** Column-level allow-list for the LSEG warehouse. */
 export const LSEG_ALLOWED_COLUMNS = Object.freeze({
     organizations: ['org_permid', 'name', 'sector'],
-    instruments: ['ric', 'org_permid', 'isin', 'exchange', 'currency'],
+    instruments: ['ric', 'org_permid', 'quote_permid', 'isin', 'exchange', 'currency'],
     lseg_fields: ['field_code', 'name', 'category', 'unit', 'description'],
     fundamentals: ['id', 'org_permid', 'field_code', 'period', 'value', 'currency', 'basis', 'scale', 'periodicity', 'reporting_state', 'knowledge_date', 'retrieved_at', 'source'],
+    prices: ['id', 'quote_permid', 'field_code', 'price_date', 'value', 'currency', 'scale', 'retrieved_at', 'source'],
 });
 
 /** The reporting bases a fundamentals value can be aligned to (see schema). */
@@ -96,11 +97,18 @@ const ORGANIZATIONS = [
  * the stable organization. Names/venues real; figures synthetic. The seed keeps
  * one listing per issuer, so RIC ↔ Org PermID is 1:1 here, but the model does
  * not assume that (an org can carry many RICs across venues).
+ *
+ * `quotePermid` is the stable QUOTE-level key a price keys on (finding #6). Unlike
+ * the Org PermIDs, these are NOT validated real quote PermIDs — they are clearly
+ * marked synthetic placeholders (`QUOTE-PENDING:<RIC>`), to be replaced with the
+ * real quote/instrument PermID (validated via lseg-mcp) before a live ingest. The
+ * label keeps the claim discipline honest: real where validated, synthetic where
+ * not, and never a fabricated identifier dressed up as real.
  */
 const INSTRUMENTS = [
-    { ric: 'IBM.N', orgPermid: '4295904307', isin: 'US4592001014', exchange: 'NYSE', currency: 'USD' },
-    { ric: 'AAPL.O', orgPermid: '4295905573', isin: 'US0378331005', exchange: 'NASDAQ', currency: 'USD' },
-    { ric: 'VOD.L', orgPermid: '4295896661', isin: 'GB00BH4HKS39', exchange: 'LSE', currency: 'USD' },
+    { ric: 'IBM.N', orgPermid: '4295904307', quotePermid: 'QUOTE-PENDING:IBM.N', isin: 'US4592001014', exchange: 'NYSE', currency: 'USD' },
+    { ric: 'AAPL.O', orgPermid: '4295905573', quotePermid: 'QUOTE-PENDING:AAPL.O', isin: 'US0378331005', exchange: 'NASDAQ', currency: 'USD' },
+    { ric: 'VOD.L', orgPermid: '4295896661', quotePermid: 'QUOTE-PENDING:VOD.L', isin: 'GB00BH4HKS39', exchange: 'LSE', currency: 'USD' },
 ];
 
 /**
@@ -135,7 +143,6 @@ const FUNDAMENTALS = {
             'TR.NetIncomeAfterTaxes': 7_502_000_000,
             'TR.TotalDebtOutstanding': 50_121_000_000,
             'TR.TotalAssetsReported': 135_241_000_000,
-            'TR.PriceClose': 16_355,
             'TR.CompanyMarketCap': 149_000_000_000,
         },
         FY2022: {
@@ -146,7 +153,6 @@ const FUNDAMENTALS = {
             'TR.NetIncomeAfterTaxes': 1_639_000_000,
             'TR.TotalDebtOutstanding': 50_700_000_000,
             'TR.TotalAssetsReported': 127_243_000_000,
-            'TR.PriceClose': 14_075,
             'TR.CompanyMarketCap': 128_000_000_000,
         },
     },
@@ -159,7 +165,6 @@ const FUNDAMENTALS = {
             'TR.NetIncomeAfterTaxes': 96_995_000_000,
             'TR.TotalDebtOutstanding': 111_088_000_000,
             'TR.TotalAssetsReported': 352_583_000_000,
-            'TR.PriceClose': 19_256,
             'TR.CompanyMarketCap': 2_994_000_000_000,
         },
     },
@@ -172,7 +177,6 @@ const FUNDAMENTALS = {
             'TR.NetIncomeAfterTaxes': 12_000_000_000,
             'TR.TotalDebtOutstanding': 60_700_000_000,
             'TR.TotalAssetsReported': 145_000_000_000,
-            'TR.PriceClose': 7_412,
             'TR.CompanyMarketCap': 20_300_000_000,
         },
     },
@@ -249,6 +253,22 @@ const RESTATEMENTS = [
 const RETRIEVED_AT = '2024-03-31';
 
 /**
+ * Synthetic daily closing-price series per instrument (finding #6: pricing is a
+ * time series at its own grain, retrieved via `get_history`, not a per-period
+ * fundamental). Values are in USD cents and end at the close previously
+ * (mis)stored as the `TR.PriceClose` fundamental, so nothing about the numbers
+ * regresses — only the grain is corrected. Keyed by RIC for readability; the seed
+ * resolves each to its stable quote PermID as rows land in `prices`. Not a claim
+ * about any real company's price history.
+ */
+const PRICE_FIELD = 'TR.PriceClose';
+const PRICES = {
+    'IBM.N':  [['2024-03-26', 16_050], ['2024-03-27', 16_210], ['2024-03-28', 16_355]],
+    'AAPL.O': [['2024-03-26', 19_010], ['2024-03-27', 19_180], ['2024-03-28', 19_256]],
+    'VOD.L':  [['2024-03-26', 7_500], ['2024-03-27', 7_460], ['2024-03-28', 7_412]],
+};
+
+/**
  * Read the periodicity off a period label: the leading letters before the year
  * ('FY2023' → 'FY', 'FQ2023Q1' → 'FQ'), defaulting to 'FY'. Used at ingest/seed
  * so a figure carries whether it is annual, quarterly, or LTM — you cannot
@@ -272,14 +292,16 @@ export function periodicityOf(period) {
 export function seedLseg(path = LSEG_DB_PATH) {
     const db = new DatabaseSync(path);
     db.exec('PRAGMA foreign_keys = ON');
-    for (const table of ['fundamentals', 'lseg_fields', 'instruments', 'organizations']) {
+    // Drop children before parents (prices → instruments/lseg_fields;
+    // fundamentals → organizations/lseg_fields) so the FKs don't block a re-seed.
+    for (const table of ['prices', 'fundamentals', 'lseg_fields', 'instruments', 'organizations']) {
         db.exec(`DROP TABLE IF EXISTS ${table}`);
     }
     db.exec(readFileSync(LSEG_SCHEMA_PATH, 'utf8'));
 
     const insertOrg = db.prepare('INSERT INTO organizations (org_permid, name, sector) VALUES (?,?,?)');
     const insertInstrument = db.prepare(
-        'INSERT INTO instruments (ric, org_permid, isin, exchange, currency) VALUES (?,?,?,?,?)',
+        'INSERT INTO instruments (ric, org_permid, quote_permid, isin, exchange, currency) VALUES (?,?,?,?,?,?)',
     );
     const insertField = db.prepare(
         'INSERT INTO lseg_fields (field_code, name, category, unit, description) VALUES (?,?,?,?,?)',
@@ -287,15 +309,19 @@ export function seedLseg(path = LSEG_DB_PATH) {
     const insertFact = db.prepare(
         'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, basis, scale, periodicity, reporting_state, knowledge_date, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
     );
+    const insertPrice = db.prepare(
+        'INSERT INTO prices (quote_permid, field_code, price_date, value, currency, scale, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?)',
+    );
 
     for (const o of ORGANIZATIONS) insertOrg.run(o.orgPermid, o.name, o.sector);
-    for (const i of INSTRUMENTS) insertInstrument.run(i.ric, i.orgPermid, i.isin, i.exchange, i.currency);
+    for (const i of INSTRUMENTS) insertInstrument.run(i.ric, i.orgPermid, i.quotePermid, i.isin, i.exchange, i.currency);
     for (const f of FIELDS) insertField.run(f.code, f.name, f.category, f.unit, f.description);
 
     // The seed fixtures are keyed by RIC for readability; resolve each to its
     // stable Org PermID (and the listing's currency) as the fact rows are landed.
     const byRicOrg = new Map(INSTRUMENTS.map((i) => [i.ric, i.orgPermid]));
     const byRicCcy = new Map(INSTRUMENTS.map((i) => [i.ric, i.currency]));
+    const byRicQuote = new Map(INSTRUMENTS.map((i) => [i.ric, i.quotePermid]));
 
     let datapoints = 0;
     const seedBasis = (byRic, basis) => {
@@ -330,8 +356,20 @@ export function seedLseg(path = LSEG_DB_PATH) {
         }
     }
 
+    // Pricing at its own grain (finding #6): a daily close series per quote,
+    // landed in `prices` keyed by the stable quote PermID — not in `fundamentals`.
+    let prices = 0;
+    for (const [ric, series] of Object.entries(PRICES)) {
+        const quotePermid = byRicQuote.get(ric);
+        const currency = byRicCcy.get(ric);
+        for (const [date, value] of series) {
+            insertPrice.run(quotePermid, PRICE_FIELD, date, value, currency, 0, RETRIEVED_AT, FEED_SOURCE);
+            prices += 1;
+        }
+    }
+
     db.close();
-    return { organizations: ORGANIZATIONS.length, instruments: INSTRUMENTS.length, fields: FIELDS.length, datapoints };
+    return { organizations: ORGANIZATIONS.length, instruments: INSTRUMENTS.length, fields: FIELDS.length, datapoints, prices };
 }
 
 /** Options common to the scenario runners. */
@@ -352,6 +390,22 @@ function resolveOrgPermid(ric, warehouse) {
     const guarded = guard('SELECT org_permid FROM instruments WHERE ric = ?', guardOptions);
     const rows = warehouse.query(guarded.sql, { params: [ric] });
     return rows[0]?.org_permid ?? null;
+}
+
+/**
+ * Resolve a RIC to its stable **quote** PermID via `instruments`. Pricing keys on
+ * the quote (a price belongs to a listing at a venue), not on the org that keys
+ * fundamentals (finding #6). Returns `null` for an unknown RIC, which the price
+ * read lets fall through to an empty series rather than guessing a quote.
+ *
+ * @param {string} ric
+ * @param {{ query: Function }} warehouse
+ * @returns {string|null}
+ */
+function resolveQuotePermid(ric, warehouse) {
+    const guarded = guard('SELECT quote_permid FROM instruments WHERE ric = ?', guardOptions);
+    const rows = warehouse.query(guarded.sql, { params: [ric] });
+    return rows[0]?.quote_permid ?? null;
 }
 
 /**
@@ -607,6 +661,69 @@ export function reconcileStandardizedVsAsReported({
     const entry = append({ ...lineage, scenario: 'lseg_standardized_vs_as_reported', ric, period }, {
         path: logPath,
         complianceTags: ['reconciliation', 'processing-integrity', 'reproducible'],
+        signer,
+    });
+    return { rows, lineage, entry };
+}
+
+/**
+ * Scenario 4 — a closing-price time series for one instrument over a date range.
+ *
+ * Pricing is a time series at its own grain (finding #6), so this reads from
+ * `prices` (keyed by the stable **quote** PermID), not from `fundamentals` (keyed
+ * by the org, a value per fiscal period). The RIC is resolved to its quote PermID,
+ * then a guarded query returns one row per trading day in the (optional) [from,
+ * to] range, ordered by date, attested and hash-chained like the other scenarios.
+ * An unknown RIC resolves to `null` and returns an empty series rather than
+ * guessing a quote.
+ *
+ * @param {object} [params]
+ * @param {string} [params.ric]
+ * @param {string|null} [params.from]  inclusive ISO start date (default: unbounded)
+ * @param {string|null} [params.to]    inclusive ISO end date (default: unbounded)
+ * @param {string} [params.field]      the pricing field code (default TR.PriceClose)
+ * @param {string} [params.dbPath]
+ * @param {string} [params.logPath]
+ * @param {object|null} [params.signer]
+ * @param {{ query: Function }} [params.warehouse]
+ * @returns {{ rows: object[], lineage: object, entry: object }}
+ */
+export function priceCloseSeries({
+    ric = DEFAULT_RIC,
+    from = null,
+    to = null,
+    field = PRICE_FIELD,
+    dbPath = LSEG_DB_PATH,
+    logPath = LSEG_LOG_PATH,
+    signer = null,
+    warehouse = new SqliteWarehouse(dbPath),
+} = {}) {
+    // Pricing keys on the stable quote PermID (a listing at a venue), not the org.
+    const quotePermid = resolveQuotePermid(ric, warehouse);
+    // The date range is optional; build the WHERE and its bound params together so
+    // an omitted bound simply drops its predicate (values are always parameters,
+    // never inlined). quote_permid, field_code and price_date are all allow-listed.
+    const clauses = ['quote_permid = ?', 'field_code = ?'];
+    const params = [quotePermid, field];
+    if (from) { clauses.push('price_date >= ?'); params.push(from); }
+    if (to) { clauses.push('price_date <= ?'); params.push(to); }
+    const sql =
+        'SELECT price_date, value AS close, currency FROM prices ' +
+        `WHERE ${clauses.join(' AND ')} ORDER BY price_date`;
+    const guarded = guard(sql, guardOptions);
+    const rows = warehouse.query(guarded.sql, { params });
+
+    const span = from || to ? ` ${from ?? '…'}..${to ?? '…'}` : '';
+    const lineage = buildLineage({
+        question: `${ric}${span} closing-price series (LSEG ${field}, get_history grain)`,
+        sql: guarded.sql,
+        tables: guarded.tables,
+        rows,
+        limitInjected: guarded.limitInjected,
+    });
+    const entry = append({ ...lineage, scenario: 'lseg_price_close_series', ric }, {
+        path: logPath,
+        complianceTags: ['pricing', 'lseg', 'reproducible'],
         signer,
     });
     return { rows, lineage, entry };
