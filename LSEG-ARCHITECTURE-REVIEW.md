@@ -165,6 +165,23 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
    (display vs non-display, TTL, redistribution, entitlement scope, identifier validity) is
    `db/lseg-licensing.md`. Tags encode policy, they don't grant a right — sign off real terms first.
 
+8. **Re-ingesting double-counts, and the integrity control PASSes on it.** _(Found 2026-09-27.)_
+   `fundamentals` had no uniqueness on its vintage key and `ingestFundamentals` did a plain `INSERT`,
+   so re-running an ingest (same day → same `knowledge_date`) landed a second identical row. The as-of
+   filter keeps every row tied on `MAX(knowledge_date)`, so both survived and every `SUM(CASE …)`
+   doubled. Doubling Revenue, Cost and Gross keeps the identity true (2R − 2C = 2G), so
+   `PI1.1-lseg-gross-profit-reconciliation` reported **PASS** on doubled figures (reproduced: IBM.N
+   FY2024 read $69.3bn gross profit instead of $34.7bn, PASS). P1's presence check only tested `> 0`.
+   **[FIXED 2026-09-27 — P9]** The vintage key `(org_permid, field_code, period, basis,
+   knowledge_date)` is now a UNIQUE index (`idx_fund_bitemporal`). Ingest is idempotent per vintage:
+   an identical datapoint is skipped (returned as `skipped`, reported by the CLI), a different figure
+   at the same key is refused ("a changed figure is a new vintage"), and each batch runs in one
+   transaction so a refusal rolls back everything it wrote. The reconciliation controls, and the
+   CLI's `reconcile` / `basis`, now require exactly one row per component: `> 1` is an EXCEPTION
+   ("duplicate datapoints"), checked before coverage, so a warehouse built before P9 is caught too.
+   Tests: a re-run is a no-op; a changed figure is refused and rolled back; the database refuses a
+   raw duplicate insert; a pre-P9 warehouse with duplicates → EXCEPTION. All four fail without the fix.
+
 ### Redundant / over-engineered
 
 - **`lsegRegistry` `SUM(CASE …)` indirection** — for a single (ric, period) it sums exactly one
@@ -174,7 +191,9 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
   after P1) scalar subqueries over `fundamentals` with the same `WHERE`; now one aggregate SELECT
   scanning the table once (`(Σrev) − (Σcost) AS identity_gross_usd`, `Σgross`, three presence
   `COUNT`s), 2 bound params. Not a UNION (guard-safe).
-- **Two sources of unit truth** — `lseg_fields.unit` and the registry `unit` can drift; keep the dictionary.
+- ~~**Two sources of unit truth**~~ **[FIXED 2026-09-27 — cleanup]** — the field dictionary now lives
+  once in `src/lseg-fields.js`: `seedLseg` lands it in `lseg_fields`, and `lsegRegistry` reads each
+  metric's unit from it instead of restating it.
 - **Seeded-but-unused fields** — only Revenue/Cost/Gross are exercised; `OperatingIncome`,
   `NetIncomeAfterTaxes`, `TotalDebtOutstanding`, `TotalAssetsReported`, `PriceClose`,
   `CompanyMarketCap` are dead weight vs the single control. Add controls that use them (balance-sheet
@@ -196,14 +215,52 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
 | ~~P6~~ ✅ | **Bitemporal keys (#5)** — DONE 2026-09-26 | Added `knowledge_date` (transaction time) distinct from `period`; restatements version (new row, not overwrite); reads take an `asOf` picking exactly one vintage per (org,field,period,basis); reproducibility is restatement-aware (`verify()` intact across a restatement). CLI `--as-of`. | M | Med |
 | ~~P7~~ ✅ | **`lseg-data` ops (#6)** — DONE 2026-09-26 | Entitlement-aware error `kind` classification in `lseg_fetch.py`; pricing moved to `get_history` at its own grain (`quote_permid` + `prices` table, ingest guards both ways); one session + universe chunking + transport backoff. | M | Med |
 | ~~P8~~ ✅ | **Licensing/redistribution sign-off (#7)** — DONE 2026-09-26 | `data_sources` usage/TTL/redistribution tags + `lseg-retention.js` report/purge + `C1.1` control + `db/lseg-licensing.md` sign-off checklist. | S (mostly non-code) | — |
+| ~~P9~~ ✅ | **Vintage-key uniqueness + idempotent ingest (#8)** — DONE 2026-09-27 | UNIQUE vintage index; ingest skips identical / refuses changed figures at the same vintage, one transaction per batch; controls + CLI require exactly one row per component (`> 1` → EXCEPTION). | S | Low |
 
 **Quickest wins with no demo risk: P1 and P2.** Most interview-valuable: **P3**.
 
-> **STATUS 2026-09-26: the entire P1–P8 backlog is complete** (P1–P6 shipped; P7 +
-> P8 on `main`). 165 core tests, all offline, green. Release anchor
-> `v0.7.0-lseg-p7` marks P1–P7; P8 lands on top. What remains is opportunistic
-> cleanup (below) and the whole-project M7 deploy in `HANDOFF.md` — no open LSEG
-> findings.
+> **STATUS 2026-09-27: P1–P9 complete, plus a cleanup pass.** P9 (finding #8, from a 2026-09-27
+> re-review) lands on top of P8. 181 core tests, all offline, green (the 8 bridge tests need
+> `python3` and skip without it).
+>
+> **Cleanup done (2026-09-27):**
+> - **Python bridge:** columns map to field codes by name only (the positional fallback is gone);
+>   NaN / pandas NA / NaT arrive as absent, never as the non-JSON `NaN` or the string `"<NA>"`;
+>   numpy scalars are unwrapped; `get_history` frames resolve per shape (single instrument,
+>   MultiIndex, per-instrument columns, long) — previously every shape but the long one produced
+>   rows with no instrument, which ingest skipped, so a live price pull landed nothing, silently;
+>   its positional fallback that dropped the requested date range is gone. A frame the bridge
+>   cannot map is a `bad_response` error. `test/lseg-bridge.test.js` runs the real bridge against a
+>   fake `lseg.data` (`test/fixtures/fake-lseg`); the mapping tests fail against the old bridge.
+> - **Node side of the seam:** a bridge that exits non-zero or prints no rows array now throws —
+>   it used to read as an empty, successful fetch. Both ingest paths refuse a row with no
+>   instrument/date and a value that is not a whole number in its unit, and both are
+>   all-or-nothing transactions.
+> - **CLI:** `lseg reconcile` / `lseg basis` run the catalog controls instead of re-implementing
+>   their gates (the copy's evidence-packet wording had drifted); `basis` gains `--export`; an
+>   absent figure prints N/A, not `$0`.
+> - **Demo seed:** rows are landed (`retrieved_at`) on the seed date, while `knowledge_date` stays
+>   2024-03-31 — so `C1.1` passes on a fresh seed instead of failing from mid-2024 on, and no
+>   figure or result hash moves.
+> - **Controls panel:** `fintelligence/controls.html` embeds all three LSEG controls (captured
+>   from the engine), not just the original six.
+> - **Docs:** core README LSEG section/layout/counts, root README transcript, `/lseg` command list.
+>
+> **Still open:**
+> - Currency/scale are still stamped from `instruments` / 0 rather than requested (`Curn`/`Scale`)
+>   and recorded from the response.
+> - `TR.PriceClose` needs a major→minor-unit conversion (quote currency aware — VOD.L quotes in
+>   GBp); until then a live price ingest is *refused* rather than landed 100× off.
+> - VOD.L is seeded as USD.
+> - Price re-pulls `INSERT OR REPLACE`, so a corrected close silently replaces the prior value.
+> - The audit append has no lock.
+> - `TR.CompanyMarketCap` is still a per-period fundamental.
+> - **Owner decisions:**
+>   - the retention purge deletes vintages that as-of reads and audit reproducibility depend on
+>     (licensing vs auditability);
+>   - trim or use the lightly exercised fields;
+>   - the root-level site duplicates are still in the repo — removing them needs the owner's go-ahead.
+> - The whole-project M7 deploy is in `HANDOFF.md`.
 
 ---
 

@@ -22,7 +22,7 @@ question
 ```bash
 npm install
 npm run seed                      # build the demo warehouse
-npm test                          # 120 tests, no credential required
+npm test                          # 181 tests, no credential required
 
 export ANTHROPIC_API_KEY=...      # or: ant auth login
 node bin/fintel.js ask "How has MRR trended over the period?"
@@ -196,13 +196,32 @@ by `TR.*` field code through the `lseg-data` library, addressed by real RICs
 the line items that compose it, with provenance down to the exact LSEG field code.
 
 ```bash
-node bin/fintel.js lseg seed                     # instruments, TR.* field dictionary, fundamentals
+node bin/fintel.js lseg seed                     # orgs (PermID), RIC aliases, TR.* dictionary, fundamentals, prices
 node bin/fintel.js lseg fundamentals IBM.N FY2023 # attested snapshot, each concept -> its blessed TR.* field
-node bin/fintel.js lseg reconcile IBM.N FY2023    # Gross Profit = Revenue - Cost of Revenue, attested
+node bin/fintel.js lseg reconcile IBM.N FY2023    # integrity: Gross Profit = Revenue - Cost of Revenue (standardized)
+node bin/fintel.js lseg basis IBM.N FY2022        # data: standardized (COA) vs as-reported gross profit
+node bin/fintel.js lseg reconcile IBM.N FY2021 --as-of 2022-06-01   # the vintage known at that date (bitemporal)
+node bin/fintel.js lseg prices IBM.N --from 2024-03-27 --to 2024-03-28   # daily closes at their own grain
 node bin/fintel.js lseg ingest IBM.N --period FY2024   # land data via the ingest seam (synthetic session)
 node bin/fintel.js lseg ingest IBM.N --period FY2023 --live   # real data — needs LSEG_APP_KEY + lseg-data
+node bin/fintel.js lseg retention [--as-of DATE] [--purge]   # cache TTL + licensing-tag governance
+node bin/fintel.js lseg license                   # per-source usage class / redistribution posture
 node bin/fintel.js lseg audit                     # verify the LSEG audit chain
 ```
+
+`reconcile` and `basis` run the catalog controls (`PI1.1-lseg-…`) and take
+`--export <file.json|.md>` for an evidence packet. Both refuse to pass on
+incomplete or corrupt inputs: an absent component is **N/A**, mixed
+currency/scale/periodicity or a duplicated datapoint is an **EXCEPTION** — never
+a PASS on a tie the data cannot support.
+
+Ingest is the one write path, and it is strict: idempotent per vintage (a re-run
+skips what it already holds; a *changed* figure at the same knowledge date is
+refused — a restatement is a new vintage), all-or-nothing per batch, and
+integer-only (a float or string in an integer unit refuses the batch). The
+Python bridge (`scripts/lseg_fetch.py`) maps vendor columns to field codes by name
+only and treats NaN/NA as absent; `test/lseg-bridge.test.js` runs it end to end
+against a fake `lseg.data` module, so its mapping is tested without an entitlement.
 
 It pairs with the open-source [`lseg-mcp`](https://github.com/GreenGrassBlueOcean/lseg_mcp)
 server, which resolves the correct `TR.*` field for a concept and drafts the
@@ -224,19 +243,20 @@ fabricated values, fabrication labelled — the same discipline as the Enron dem
 **Real:** the guard (table *and* column allow-lists, a wall-clock query budget,
 a row-level scope hook driven by an authenticated principal), read-only
 enforcement behind a warehouse-connector interface (SQLite reference adapter),
-three SQLite warehouses (SaaS finance, capital markets, and a synthetic Enron
-reporting-gap POC whose aggregates reconcile to real 10-K figures), a first-class
+four SQLite warehouses (SaaS finance, capital markets, a synthetic Enron
+reporting-gap POC whose aggregates reconcile to real 10-K figures, and LSEG
+company fundamentals keyed by real identifiers with synthetic values), a first-class
 metric registry the scenarios resolve against, lineage capture and hashing, the
 hash-chained audit log with Ed25519 signing and a pluggable external-anchoring
 hook, grounding verification (unit-aware, and able to check derived figures the
 query returns), a control-result shape and an offline-verifiable evidence packet
 (intent → SQL → CSV → hash + signature, `fintel enron … --export`), a SOC 2
 control catalog whose entries assert PASS/EXCEPTION and emit that packet
-(`fintel controls run …`; six controls across all three warehouses — reconciliation,
-reproducibility, and audit-chain integrity), an MCP server that exposes the
+(`fintel controls run …`; nine controls across all four warehouses — reconciliation,
+reproducibility, audit-chain integrity, and LSEG data retention), an MCP server that exposes the
 controls, canonical queries and audit verification as tools and each warehouse's
 live schema as a resource (`fintel mcp`, stdio) plus a token-guarded HTTP API for a
-web proxy (`fintel serve`), the CLI, and 125 tests that run offline.
+web proxy (`fintel serve`), the CLI, and 181 tests that run offline.
 
 **Synthetic:** the data. 416 customers over six months, generated
 deterministically from a fixed seed so that the same question always produces
@@ -282,6 +302,9 @@ db/schema.sql          SaaS warehouse: four tables; money in integer cents
 db/markets-schema.sql  markets warehouse: accounts, orders, executions, prices, positions
 db/enron-schema.sql    Enron POC warehouse: entities, revenue, debt, reported financials (USD millions)
 db/enron-anchor.md     Enron's real reported figures, cited to the 10-K (the aggregate anchor)
+db/lseg-schema.sql     LSEG warehouse: organizations (PermID), instruments (RIC alias), fundamentals, prices, data_sources
+db/lseg-anchor.md      LSEG claim discipline + the validated TR.* field codes
+db/lseg-licensing.md   the sign-off checklist before a live LSEG key (usage, TTL, redistribution)
 src/db.js              read-only connection, deterministic seed, wall-clock query budget
 src/guard.js           the security boundary (table + column allow-lists, scope/as-of hooks)
 src/planner.js         question → SQL (structured output, Claude Opus 4.8)
@@ -297,6 +320,11 @@ src/auth.js            authentication + per-principal row-level security
 src/markets.js         capital-markets warehouse, metric layer, surveillance scenarios
 src/enron.js           Enron POC warehouse, reporting-gap scenarios (real anchors, synthetic rows)
 src/saas.js            canonical credential-free SaaS queries (e.g. the MRR reconciliation)
+src/lseg.js            LSEG warehouse seed + attested scenarios (snapshot, reconciliations, prices)
+src/lseg-fields.js     the TR.* field dictionary — the single source of each field's unit
+src/lseg-ingest.js     the ingest seam: Fake/Real LsegSession, idempotent all-or-nothing landing
+src/lseg-retention.js  cache-retention report + purge against per-source licensing tags
+scripts/lseg_fetch.py  Python bridge to lseg-data (get_data / get_history), used by RealLsegSession
 src/evidence.js        control-result shape + verifiable evidence packet (intent→SQL→CSV→hash+sig)
 src/controls.js        the SOC 2 control catalog (queries that assert PASS/EXCEPTION)
 src/warehouses.js      warehouse descriptors + live PRAGMA schema (allow-list filtered)
@@ -305,7 +333,7 @@ src/mcp-server.js      the stdio MCP transport (the only file that imports the S
 src/http-server.js     HTTP JSON API over the same handlers (what the web proxy calls)
 src/ask.js             the pipeline
 bin/fintel.js          CLI
-test/                  125 tests, none requiring a credential
+test/                  181 tests, none requiring a credential (the bridge tests need python3)
 ```
 
 Requires Node 22+ (`node:sqlite` is built in, so there is no native database

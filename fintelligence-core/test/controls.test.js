@@ -170,6 +170,30 @@ test('the LSEG reconciliation refuses to reconcile across mixed currencies (FX g
     assert.match(control.exception, /normalise/);
 });
 
+test('the LSEG reconciliation flags duplicated datapoints instead of passing a doubled tie (P9)', () => {
+    const db = join(mkdtempSync(join(tmpdir(), 'fintel-ctl-dup-')), 'lseg.db');
+    seedLseg(db);
+    // A warehouse without the vintage key (built before P9, or written by
+    // something that bypassed it): every IBM.N FY2023 standardized row lands twice.
+    const w = new DatabaseSync(db);
+    w.exec('DROP INDEX idx_fund_bitemporal');
+    w.exec(
+        'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, basis, scale, periodicity, reporting_state, knowledge_date, retrieved_at, source) ' +
+            'SELECT org_permid, field_code, period, value, currency, basis, scale, periodicity, reporting_state, knowledge_date, retrieved_at, source ' +
+            "FROM fundamentals WHERE org_permid = '4295904307' AND period = 'FY2023' AND basis = 'standardized'",
+    );
+    w.close();
+
+    const { control, rows } = getControl('PI1.1-lseg-gross-profit-reconciliation').run({ ric: 'IBM.N', period: 'FY2023', dbPath: db, logPath: freshLog() });
+    // Doubling every component keeps Revenue − Cost = Gross, so the figures still tie…
+    assert.equal(rows[0].identity_gross_usd, rows[0].reported_gross_usd);
+    assert.equal(rows[0].revenue_present, 2);
+    // …which is exactly why a tie alone must not PASS.
+    assert.equal(control.status, CONTROL_STATUS.EXCEPTION);
+    assert.match(control.exception, /duplicate datapoints/);
+    assert.match(control.exception, /Revenue ×2/);
+});
+
 test('the standardized-vs-as-reported control PASSES when LSEG agrees with the filing', () => {
     const db = join(mkdtempSync(join(tmpdir(), 'fintel-ctl-basis-')), 'lseg.db');
     seedLseg(db);

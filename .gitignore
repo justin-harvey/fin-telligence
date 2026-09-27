@@ -8,6 +8,8 @@ node_modules/
 *.db-shm
 # Generated audit logs (the schema/seed are source; the logs are runtime output)
 *.jsonl
+# Python bytecode (the LSEG bridge and its test fixture)
+__pycache__/
 
 # Secrets and local env
 .env

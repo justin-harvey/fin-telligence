@@ -506,7 +506,11 @@
 node bin/fintel.js <span class="p">lseg seed</span>
 node bin/fintel.js <span class="p">lseg fundamentals IBM.N FY2023</span>   <span class="c"># attested snapshot, each concept → its TR.* field</span>
 node bin/fintel.js <span class="p">lseg reconcile IBM.N FY2023</span>      <span class="c"># gross profit = revenue − cost of revenue</span>
-node bin/fintel.js <span class="p">lseg ingest IBM.N --period FY2024</span>   <span class="c"># land data via the ingest seam (fake session)</span>
+node bin/fintel.js <span class="p">lseg basis IBM.N FY2022</span>          <span class="c"># standardized vs as-reported: a $500m classification difference</span>
+node bin/fintel.js <span class="p">lseg reconcile IBM.N FY2021 --as-of 2022-06-01</span>   <span class="c"># the figure as known before a restatement</span>
+node bin/fintel.js <span class="p">lseg prices IBM.N</span>                <span class="c"># daily closes at their own grain (quote PermID)</span>
+node bin/fintel.js <span class="p">lseg ingest IBM.N --period FY2024</span>   <span class="c"># land data via the ingest seam (fake session); re-running is a no-op</span>
+node bin/fintel.js <span class="p">lseg retention</span>                    <span class="c"># cache TTL + licensing tags per source</span>
 node bin/fintel.js <span class="p">lseg audit</span>                        <span class="c"># verify the LSEG audit chain</span>
 
 <span class="c"># real LSEG data — needs an entitlement</span>

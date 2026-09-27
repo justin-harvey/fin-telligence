@@ -13,6 +13,8 @@
  * so a generated query is expected to compute a named metric the one agreed way.
  */
 
+import { lsegFieldUnit } from './lseg-fields.js';
+
 export class UnknownMetric extends Error {
     /** @param {string} name */
     constructor(name) {
@@ -148,7 +150,8 @@ export function enronRegistry() {
  * field-keyed sum over the long-format `fundamentals` table, so resolving a
  * concept ("revenue", "gross profit") always sums the one correct LSEG `TR.*`
  * field the one agreed way. Filtering to a single instrument+period upstream
- * makes each sum a single datapoint. All monetary metrics are whole USD.
+ * makes each sum a single datapoint. Each metric's unit is read from the field
+ * dictionary (src/lseg-fields.js), declared there once rather than restated here.
  *
  * Absent field → NULL, never 0. The CASE has no `ELSE 0`: when the field's row
  * is missing (an LSEG `<NA>`, an unentitled field, a coverage gap) every branch
@@ -161,37 +164,31 @@ export function enronRegistry() {
  * @returns {MetricRegistry}
  */
 export function lsegRegistry() {
-    /** @param {string} code @returns {string} */
-    const fieldSum = (code) => `SUM(CASE WHEN field_code = '${code}' THEN value END)`;
+    /** One TR.* field: its field-keyed sum, in the unit the dictionary declares. */
+    const field = (code) => ({ sql: `SUM(CASE WHEN field_code = '${code}' THEN value END)`, unit: lsegFieldUnit(code) });
     return new MetricRegistry()
         .define('revenue_usd', {
             description: 'Revenue for the instrument/period, from LSEG field TR.Revenue, in USD.',
-            sql: fieldSum('TR.Revenue'),
-            unit: 'usd',
+            ...field('TR.Revenue'),
         })
         .define('cost_of_revenue_usd', {
             description: 'Cost of revenue, total, from LSEG field TR.CostOfRevenueTotal, in USD.',
-            sql: fieldSum('TR.CostOfRevenueTotal'),
-            unit: 'usd',
+            ...field('TR.CostOfRevenueTotal'),
         })
         .define('gross_profit_usd', {
             description: 'Gross profit as reported, from LSEG field TR.GrossProfit, in USD.',
-            sql: fieldSum('TR.GrossProfit'),
-            unit: 'usd',
+            ...field('TR.GrossProfit'),
         })
         .define('operating_income_usd', {
             description: 'Operating income, from LSEG field TR.OperatingIncome, in USD.',
-            sql: fieldSum('TR.OperatingIncome'),
-            unit: 'usd',
+            ...field('TR.OperatingIncome'),
         })
         .define('net_income_usd', {
             description: 'Net income after taxes, from LSEG field TR.NetIncomeAfterTaxes, in USD.',
-            sql: fieldSum('TR.NetIncomeAfterTaxes'),
-            unit: 'usd',
+            ...field('TR.NetIncomeAfterTaxes'),
         })
         .define('total_debt_usd', {
             description: 'Total debt outstanding, from LSEG field TR.TotalDebtOutstanding, in USD.',
-            sql: fieldSum('TR.TotalDebtOutstanding'),
-            unit: 'usd',
+            ...field('TR.TotalDebtOutstanding'),
         });
 }

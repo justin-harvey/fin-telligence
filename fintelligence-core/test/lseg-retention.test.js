@@ -15,16 +15,18 @@ import { seedLseg } from '../src/lseg.js';
 import { retentionReport, purgeExpired } from '../src/lseg-retention.js';
 import { getControl } from '../src/controls.js';
 
-function freshDb() {
-    const db = join(mkdtempSync(join(tmpdir(), 'fintel-lsegret-')), 'lseg.db');
-    seedLseg(db);
-    return db;
-}
-
-// The seed stamps every row retrieved_at = 2024-03-31 with a 90-day TTL, so an
-// as-of within the window is fresh and one well past it is entirely stale.
+// Every row is landed (retrieved_at) on LANDED_AT under a 90-day TTL, so an as-of
+// within the window is fresh and one well past it is entirely stale. The seed
+// lands on today's date by default; these tests pin it so the timeline is fixed.
+const LANDED_AT = '2024-03-31';
 const WITHIN_TTL = '2024-04-15';
 const PAST_TTL = '2030-01-01';
+
+function freshDb() {
+    const db = join(mkdtempSync(join(tmpdir(), 'fintel-lsegret-')), 'lseg.db');
+    seedLseg(db, { retrievedAt: LANDED_AT });
+    return db;
+}
 
 test('every persisted source is tagged (usage class + TTL), nothing untagged', () => {
     const report = retentionReport({ dbPath: freshDb(), asOf: WITHIN_TTL });
@@ -72,6 +74,22 @@ test('purgeExpired dry-run counts without deleting; a real purge clears stale ro
     assert.equal(real.purged.fundamentals, 50);
     assert.equal(real.purged.prices, 9);
     assert.equal(retentionReport({ dbPath: db, asOf: PAST_TTL }).staleTotal, 0, 'nothing left past the TTL');
+});
+
+test('a freshly seeded warehouse passes the retention control today — the demo is not born stale', () => {
+    // The seed used to stamp retrieved_at = 2024-03-31, so from mid-2024 every
+    // fresh seed failed C1.1. It now lands rows today; only knowledge_date (the
+    // as-of axis) stays pinned to the snapshot's 2024 vintage.
+    const db = join(mkdtempSync(join(tmpdir(), 'fintel-lsegret-today-')), 'lseg.db');
+    seedLseg(db);
+    const { control, report } = getControl('C1.1-lseg-data-retention').run({ dbPath: db });
+    assert.equal(control.status, 'PASS');
+    assert.equal(report.staleTotal, 0);
+
+    const w = new DatabaseSync(db);
+    const { knownAt } = w.prepare("SELECT MAX(knowledge_date) knownAt FROM fundamentals WHERE reporting_state = 'reported'").get();
+    w.close();
+    assert.equal(knownAt, '2024-03-31', 'the as-of axis is unchanged — result hashes do not move');
 });
 
 test('the data-retention control PASSes inside the window and EXCEPTIONs past it', () => {

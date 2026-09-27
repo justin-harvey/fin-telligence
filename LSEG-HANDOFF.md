@@ -1,5 +1,11 @@
 # LSEG hardening — handoff (backlog complete)
 
+> **Update 2026-09-27:** P8 has since shipped (`db726ff`). A re-review added P9 (finding #8:
+> re-ingest double-counted and still PASSed) plus a cleanup pass — bridge mapping, strict
+> ingest, CLI via the controls, demo seed, controls panel, docs — and left some items open.
+> The current state and the open list are in the **STATUS** block of `LSEG-ARCHITECTURE-REVIEW.md`;
+> the text below is the 2026-09-26 snapshot.
+
 _Self-contained. Written 2026-09-26. P1–P7 shipped on `main` (release tag
 `v0.7.0-lseg-p7`); **P8 is implemented in the working tree, 165 tests green, NOT
 yet committed** (repo `justin-harvey/fin-telligence`, clone

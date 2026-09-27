@@ -43,8 +43,10 @@ import { retentionReport } from './lseg-retention.js';
  * @param {string} params.unit
  * @param {(v: number) => string} [params.fmt]  how to render a figure in the exception text
  * @param {{ label: string, key: string }[]} [params.requiredPresence]  components
- *   whose presence-count column must be > 0 for the reconciliation to be
- *   computable; when any is absent the control is N/A, never a false PASS.
+ *   whose presence-count column must be exactly 1 — one datapoint (one vintage)
+ *   per component. 0 means absent: the control is N/A, never a false PASS. More
+ *   than 1 means duplicated rows (finding #8): the control is an EXCEPTION, because
+ *   doubled components can still tie (2·Revenue − 2·Cost = 2·Gross).
  * @param {{ label: string, key: string }[]} [params.consistencyKeys]  columns
  *   holding a DISTINCT-value count that must equal 1 (currency, scale,
  *   periodicity); >1 means the figures are incomparable and the control fails
@@ -67,6 +69,32 @@ function reconciliation({
 }) {
     const { rows, entry, lineage } = run;
     const r = rows[0] ?? {};
+
+    // Integrity gate (finding #8). Each component is one datapoint — one vintage
+    // of one field. A count above 1 means duplicated rows (a double-ingest, or a
+    // writer that bypassed the vintage key), and the comparison cannot see it:
+    // doubling every component keeps Revenue − Cost = Gross, so the figures still
+    // tie. Fail loudly rather than PASS on doubled numbers.
+    const duplicated = (requiredPresence ?? [])
+        .filter(({ key }) => Number(r[key]) > 1)
+        .map(({ label, key }) => `${label} ×${Number(r[key])}`);
+    if (duplicated.length > 0) {
+        const control = controlResult({
+            controlId,
+            criterion,
+            description,
+            status: CONTROL_STATUS.EXCEPTION,
+            exception:
+                `duplicate datapoints: ${duplicated.join(', ')} — expected exactly one row per component; ` +
+                'summed duplicates can still tie, so these figures are not evidence until the duplicates are removed',
+            figures: [
+                { label: leftLabel, value: r[leftKey] ?? null, unit },
+                { label: rightLabel, value: r[rightKey] ?? null, unit },
+                { label: 'Integrity', value: `duplicated ${duplicated.join(', ')}` },
+            ],
+        });
+        return { control, entry, rows, lineage };
+    }
 
     // Coverage gate. A missing component surfaces as an explicit presence count
     // of 0, or as a NULL figure (a field-keyed sum over an absent row is NULL,

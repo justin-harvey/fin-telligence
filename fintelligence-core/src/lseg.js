@@ -38,6 +38,7 @@ import { guard } from './guard.js';
 import { buildLineage } from './lineage.js';
 import { append } from './audit.js';
 import { lsegRegistry } from './registry.js';
+import { LSEG_FIELDS } from './lseg-fields.js';
 import { SqliteWarehouse } from './warehouse.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -138,23 +139,6 @@ const INSTRUMENTS = [
     { ric: 'IBM.N', orgPermid: '4295904307', quotePermid: 'QUOTE-PENDING:IBM.N', isin: 'US4592001014', exchange: 'NYSE', currency: 'USD' },
     { ric: 'AAPL.O', orgPermid: '4295905573', quotePermid: 'QUOTE-PENDING:AAPL.O', isin: 'US0378331005', exchange: 'NASDAQ', currency: 'USD' },
     { ric: 'VOD.L', orgPermid: '4295896661', quotePermid: 'QUOTE-PENDING:VOD.L', isin: 'GB00BH4HKS39', exchange: 'LSE', currency: 'USD' },
-];
-
-/**
- * The LSEG field dictionary the warehouse holds. Field codes are real LSEG
- * `TR.*` conventions; units are the native unit each value is stored in. This
- * mirrors what lseg-mcp's `search_data_dictionary` resolves.
- */
-const FIELDS = [
-    { code: 'TR.Revenue', name: 'Revenue', category: 'Fundamentals', unit: 'usd', description: 'Total revenue for the reporting period.' },
-    { code: 'TR.CostOfRevenueTotal', name: 'Cost of Revenue, Total', category: 'Fundamentals', unit: 'usd', description: 'Total cost of revenue for the reporting period.' },
-    { code: 'TR.GrossProfit', name: 'Gross Profit', category: 'Fundamentals', unit: 'usd', description: 'Revenue less cost of revenue, as reported.' },
-    { code: 'TR.OperatingIncome', name: 'Operating Income', category: 'Fundamentals', unit: 'usd', description: 'Income from operations.' },
-    { code: 'TR.NetIncomeAfterTaxes', name: 'Net Income After Taxes', category: 'Fundamentals', unit: 'usd', description: 'Net income after taxes.' },
-    { code: 'TR.TotalDebtOutstanding', name: 'Total Debt Outstanding', category: 'Fundamentals', unit: 'usd', description: 'Total interest-bearing debt outstanding.' },
-    { code: 'TR.TotalAssetsReported', name: 'Total Assets, Reported', category: 'Fundamentals', unit: 'usd', description: 'Total assets as reported on the balance sheet.' },
-    { code: 'TR.PriceClose', name: 'Price Close', category: 'Pricing', unit: 'usd_cents', description: 'Closing price, in currency minor units (cents).' },
-    { code: 'TR.CompanyMarketCap', name: 'Company Market Capitalisation', category: 'Valuation', unit: 'usd', description: 'Market capitalisation.' },
 ];
 
 /**
@@ -278,8 +262,16 @@ const RESTATEMENTS = [
     },
 ];
 
-/** The date the synthetic snapshot is stamped as retrieved (and first known). */
-const RETRIEVED_AT = '2024-03-31';
+/**
+ * When the synthetic snapshot's baseline vintage became KNOWN — its knowledge_date
+ * (finding #5). Fixed, so as-of reads and result hashes never drift with the clock.
+ *
+ * Deliberately not the landing date (`retrieved_at`), which is whenever the seed
+ * runs: the cache-retention TTL is measured from landing, and stamping landing with
+ * this 2024 date made every fresh seed "born stale" — the C1.1 retention control
+ * reported an EXCEPTION on the demo from mid-2024 on.
+ */
+const SNAPSHOT_KNOWN_AT = '2024-03-31';
 
 /**
  * Synthetic daily closing-price series per instrument (finding #6: pricing is a
@@ -313,12 +305,14 @@ export function periodicityOf(period) {
 /**
  * Build the LSEG warehouse: schema plus the deterministic synthetic snapshot
  * above. No randomness — every value is authored so the accounting identities
- * reconcile exactly.
+ * reconcile exactly. The one date that varies is `retrievedAt`, when the rows are
+ * landed (today, by default): it feeds the retention TTL, never a figure or a hash.
  *
  * @param {string} [path]
- * @returns {{ organizations: number, instruments: number, fields: number, datapoints: number }}
+ * @param {{ retrievedAt?: string }} [options]  ISO landing date (default: today)
+ * @returns {{ organizations: number, instruments: number, fields: number, datapoints: number, prices: number, sources: number }}
  */
-export function seedLseg(path = LSEG_DB_PATH) {
+export function seedLseg(path = LSEG_DB_PATH, { retrievedAt = new Date().toISOString().slice(0, 10) } = {}) {
     const db = new DatabaseSync(path);
     db.exec('PRAGMA foreign_keys = ON');
     // Drop children before parents (prices → instruments/lseg_fields;
@@ -348,7 +342,7 @@ export function seedLseg(path = LSEG_DB_PATH) {
 
     for (const o of ORGANIZATIONS) insertOrg.run(o.orgPermid, o.name, o.sector);
     for (const i of INSTRUMENTS) insertInstrument.run(i.ric, i.orgPermid, i.quotePermid, i.isin, i.exchange, i.currency);
-    for (const f of FIELDS) insertField.run(f.code, f.name, f.category, f.unit, f.description);
+    for (const f of LSEG_FIELDS) insertField.run(f.code, f.name, f.category, f.unit, f.description);
 
     // The seed fixtures are keyed by RIC for readability; resolve each to its
     // stable Org PermID (and the listing's currency) as the fact rows are landed.
@@ -364,10 +358,10 @@ export function seedLseg(path = LSEG_DB_PATH) {
             for (const [period, values] of Object.entries(byPeriod)) {
                 // Synthetic values are stored raw (scale 0), single-currency, as
                 // last reported; periodicity is read off the period label. The
-                // baseline snapshot's knowledge_date is the retrieval date — a
+                // baseline snapshot's knowledge_date is SNAPSHOT_KNOWN_AT — a
                 // single vintage, so the latest-as-of read returns it unchanged.
                 for (const [code, value] of Object.entries(values)) {
-                    insertFact.run(orgPermid, code, period, value, currency, basis, 0, periodicityOf(period), 'reported', RETRIEVED_AT, RETRIEVED_AT, FEED_SOURCE);
+                    insertFact.run(orgPermid, code, period, value, currency, basis, 0, periodicityOf(period), 'reported', SNAPSHOT_KNOWN_AT, retrievedAt, FEED_SOURCE);
                     datapoints += 1;
                 }
             }
@@ -384,7 +378,7 @@ export function seedLseg(path = LSEG_DB_PATH) {
         const orgPermid = byRicOrg.get(v.ric);
         const currency = byRicCcy.get(v.ric);
         for (const [code, value] of Object.entries(v.values)) {
-            insertFact.run(orgPermid, code, v.period, value, currency, BASIS_STANDARDIZED, 0, periodicityOf(v.period), v.reportingState, v.knowledgeDate, RETRIEVED_AT, FEED_SOURCE);
+            insertFact.run(orgPermid, code, v.period, value, currency, BASIS_STANDARDIZED, 0, periodicityOf(v.period), v.reportingState, v.knowledgeDate, retrievedAt, FEED_SOURCE);
             datapoints += 1;
         }
     }
@@ -396,7 +390,7 @@ export function seedLseg(path = LSEG_DB_PATH) {
         const quotePermid = byRicQuote.get(ric);
         const currency = byRicCcy.get(ric);
         for (const [date, value] of series) {
-            insertPrice.run(quotePermid, PRICE_FIELD, date, value, currency, 0, RETRIEVED_AT, FEED_SOURCE);
+            insertPrice.run(quotePermid, PRICE_FIELD, date, value, currency, 0, retrievedAt, FEED_SOURCE);
             prices += 1;
         }
     }
@@ -409,7 +403,7 @@ export function seedLseg(path = LSEG_DB_PATH) {
     return {
         organizations: ORGANIZATIONS.length,
         instruments: INSTRUMENTS.length,
-        fields: FIELDS.length,
+        fields: LSEG_FIELDS.length,
         datapoints,
         prices,
         sources: DATA_SOURCES.length,
