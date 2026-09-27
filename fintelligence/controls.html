@@ -297,6 +297,94 @@
     "verification": null
   },
   {
+    "id": "PI1.1-lseg-gross-profit-reconciliation",
+    "warehouse": "lseg",
+    "criterion": "Processing Integrity (PI1.1) — the standardized model is internally consistent and untampered",
+    "description": "On LSEG's standardized basis Gross Profit is defined as Revenue − Cost of Revenue, so this identity holds by construction on clean vendor data; the control is a pipeline-integrity check that fails on ingest corruption or a value altered after landing.",
+    "status": "PASS",
+    "exception": null,
+    "figures": [
+      {
+        "label": "Gross profit (Revenue − Cost of Revenue)",
+        "value": 33914000000,
+        "unit": "usd"
+      },
+      {
+        "label": "Gross profit (reported, TR.GrossProfit)",
+        "value": 33914000000,
+        "unit": "usd"
+      },
+      {
+        "label": "Variance",
+        "value": 0,
+        "unit": "usd"
+      }
+    ],
+    "intent": "IBM.N FY2023 gross profit: Revenue − Cost of Revenue reconciled to reported TR.GrossProfit (standardized/COA basis)",
+    "sql": "SELECT (SUM(CASE WHEN field_code = 'TR.Revenue' THEN value END)) - (SUM(CASE WHEN field_code = 'TR.CostOfRevenueTotal' THEN value END)) AS identity_gross_usd, SUM(CASE WHEN field_code = 'TR.GrossProfit' THEN value END) AS reported_gross_usd, COUNT(CASE WHEN field_code = 'TR.Revenue' THEN value END) AS revenue_present, COUNT(CASE WHEN field_code = 'TR.CostOfRevenueTotal' THEN value END) AS cost_present, COUNT(CASE WHEN field_code = 'TR.GrossProfit' THEN value END) AS gross_present, COUNT(DISTINCT CASE WHEN field_code IN ('TR.Revenue', 'TR.CostOfRevenueTotal', 'TR.GrossProfit') THEN currency END) AS currency_variants, COUNT(DISTINCT CASE WHEN field_code IN ('TR.Revenue', 'TR.CostOfRevenueTotal', 'TR.GrossProfit') THEN scale END) AS scale_variants, COUNT(DISTINCT CASE WHEN field_code IN ('TR.Revenue', 'TR.CostOfRevenueTotal', 'TR.GrossProfit') THEN periodicity END) AS periodicity_variants, MAX(CASE WHEN field_code = 'TR.Revenue' THEN currency END) AS currency FROM fundamentals WHERE org_permid = ? AND period = ? AND basis = ? AND knowledge_date = (SELECT MAX(knowledge_date) FROM fundamentals f2 WHERE f2.org_permid = fundamentals.org_permid AND f2.field_code = fundamentals.field_code AND f2.period = fundamentals.period AND f2.basis = fundamentals.basis AND f2.knowledge_date <= ?)\nLIMIT 1000",
+    "resultHash": "23eda8976eae858b99fcb9628397e07f2d85e0e15543c48211508b43bf5950b2",
+    "verification": null
+  },
+  {
+    "id": "PI1.1-lseg-standardized-vs-as-reported",
+    "warehouse": "lseg",
+    "criterion": "Processing Integrity (PI1.1) — the vendor-standardized figure reconciles to the company's own filing",
+    "description": "LSEG standardized (COA) gross profit ties out to as-reported gross profit; a variance is a real classification difference (LSEG normalisation vs the filing) to investigate, not a data error.",
+    "status": "PASS",
+    "exception": null,
+    "figures": [
+      {
+        "label": "Gross profit (standardized, COA)",
+        "value": 33914000000,
+        "unit": "usd"
+      },
+      {
+        "label": "Gross profit (as reported)",
+        "value": 33914000000,
+        "unit": "usd"
+      },
+      {
+        "label": "Variance",
+        "value": 0,
+        "unit": "usd"
+      }
+    ],
+    "intent": "IBM.N FY2023 gross profit: LSEG standardized (COA) reconciled to as-reported",
+    "sql": "SELECT SUM(CASE WHEN field_code = 'TR.GrossProfit' AND basis = 'standardized' THEN value END) AS standardized_gross_usd, SUM(CASE WHEN field_code = 'TR.GrossProfit' AND basis = 'as_reported' THEN value END) AS as_reported_gross_usd, COUNT(CASE WHEN field_code = 'TR.GrossProfit' AND basis = 'standardized' THEN value END) AS standardized_present, COUNT(CASE WHEN field_code = 'TR.GrossProfit' AND basis = 'as_reported' THEN value END) AS as_reported_present, COUNT(DISTINCT CASE WHEN field_code = 'TR.GrossProfit' THEN currency END) AS currency_variants, COUNT(DISTINCT CASE WHEN field_code = 'TR.GrossProfit' THEN scale END) AS scale_variants, COUNT(DISTINCT CASE WHEN field_code = 'TR.GrossProfit' THEN periodicity END) AS periodicity_variants, MAX(CASE WHEN field_code = 'TR.GrossProfit' THEN currency END) AS currency FROM fundamentals WHERE org_permid = ? AND period = ? AND knowledge_date = (SELECT MAX(knowledge_date) FROM fundamentals f2 WHERE f2.org_permid = fundamentals.org_permid AND f2.field_code = fundamentals.field_code AND f2.period = fundamentals.period AND f2.basis = fundamentals.basis AND f2.knowledge_date <= ?)\nLIMIT 1000",
+    "resultHash": "91461dd126f8da8de1bd13de8c6f98636d14a1fe5c38c920189694df3e040424",
+    "verification": null
+  },
+  {
+    "id": "C1.1-lseg-data-retention",
+    "warehouse": "lseg",
+    "criterion": "Confidentiality (C1.1) — cached vendor data is tagged with its licensing terms and retained only within its licensed window",
+    "description": "Every persisted LSEG source carries a usage class + retention TTL (finding #7), and no cached value is held past its TTL; an untagged source, a missing TTL, or a stale row is an EXCEPTION.",
+    "status": "PASS",
+    "exception": null,
+    "figures": [
+      {
+        "label": "Sources tagged",
+        "value": "1/1",
+        "unit": null
+      },
+      {
+        "label": "Rows past retention TTL",
+        "value": 0,
+        "unit": "rows"
+      },
+      {
+        "label": "As of",
+        "value": "2026-09-27",
+        "unit": null
+      }
+    ],
+    "intent": null,
+    "sql": null,
+    "resultHash": null,
+    "verification": null,
+    "note": "This control reads licensing tags and retention metadata rather than running a query, so there is no query packet to export."
+  },
+  {
     "id": "CC7.3-figure-reproducibility",
     "warehouse": "markets",
     "criterion": "Common Criteria (CC7.3) — a past figure reproduces exactly",
@@ -378,6 +466,8 @@
         if (unit === "shares") return Number(v).toLocaleString("en-US") + " sh";
         if (unit === "sha256") return String(v).slice(0, 20) + "…";
         if (unit === "count") return Number(v).toLocaleString("en-US");
+        if (unit === "usd") return v == null ? "N/A" : "$" + Number(v).toLocaleString("en-US");
+        if (unit === "rows") return Number(v).toLocaleString("en-US") + " rows";
         return String(v);
       }
       function shortId(id) { return id.split("-")[0]; }
@@ -423,7 +513,7 @@
             (canExport ? '<button class="btn" onclick="alert(\'The signed evidence packet (intent → SQL → CSV → hash + signature) is generated by the engine: fintel controls run ' + c.id + ' --export packet.json\')">Export evidence packet</button>' : '') +
             '<button class="btn ghost" onclick="rerunById(\'' + c.id + '\')">Re-run live</button>' +
           '</div>' +
-          (canExport ? "" : '<div class="note">This control verifies an existing chain, so the chain itself is the evidence — there is no query packet to export.</div>');
+          (canExport ? "" : '<div class="note">' + (c.note || 'This control verifies an existing chain, so the chain itself is the evidence — there is no query packet to export.') + '</div>');
       }
 
       function setRole(role) {

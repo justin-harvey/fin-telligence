@@ -4,7 +4,7 @@ Live: https://fin-telligence.netlify.app/enron
 **Financial answers you can audit. The model writes SQL, the database produces the numbers, and every figure in the answer is verified against the data before you see it.**
 
 [![Prototype](https://img.shields.io/badge/prototype-live-brightgreen.svg)](https://fin-telligence.netlify.app/)
-[![Core tests](https://img.shields.io/badge/core-165%20tests%2C%20offline-blue.svg)](fintelligence-core/)
+[![Core tests](https://img.shields.io/badge/core-181%20tests%2C%20offline-blue.svg)](fintelligence-core/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 The premise is simple: a language model is excellent at turning a question into SQL, and terrible at being trusted with the arithmetic. So it is never trusted with the arithmetic. The model writes a query, a read-only database returns the rows, and a verifier checks that every number in the prose actually came from those rows. What you get back is either a grounded answer with a full provenance trail, or an explicit refusal. Never an unverified paragraph presented as fact.
@@ -23,7 +23,7 @@ question
 
 | Path | What it is |
 |------|-----------|
-| [`fintelligence-core/`](fintelligence-core/) | **The working engine.** A Node.js CLI and library that implements the full pipeline above: guard, read-only warehouse, grounding verifier, lineage capture, and a tamper-evident audit chain. 165 tests, no API credential required to run them. |
+| [`fintelligence-core/`](fintelligence-core/) | **The working engine.** A Node.js CLI and library that implements the full pipeline above: guard, read-only warehouse, grounding verifier, lineage capture, and a tamper-evident audit chain. 181 tests, no API credential required to run them. |
 | [`fintelligence/`](fintelligence/) | **The prototype site** deployed at [fin-telligence.netlify.app](https://fin-telligence.netlify.app/). It argues for the thesis; the core repository does it. |
 | [`fintelligence/enron.html`](fintelligence/enron.html) | **The Enron reporting-gap case study**, live at [/enron](https://fin-telligence.netlify.app/enron) — reported FY2000 figures set against what the underlying rows support, each grounded and hash-chained. |
 | [`fintelligence/lseg.html`](fintelligence/lseg.html) | **The LSEG fundamentals demo**, live at [/lseg](https://fin-telligence.netlify.app/lseg) — company financials by real `TR.*` field codes (validated via lseg-mcp), reconciled to their components and attested; synthetic values, credential-swap to real data. |
@@ -131,14 +131,17 @@ node bin/fintel.js lseg fundamentals IBM.N FY2023
 
 # Standardized-model integrity (tamper check): Revenue − Cost ties to reported gross
 node bin/fintel.js lseg reconcile IBM.N FY2023
-#   Revenue − Cost of Revenue : $33,914,000,000   (USD)
-#   Variance                  : $0   ✓ PASS
+#   Gross profit (Revenue − Cost of Revenue)  : $33,914,000,000
+#   Gross profit (reported, TR.GrossProfit)   : $33,914,000,000
+#   Variance                                  : $0
+#   ✓ PASS
 
 # Standardized vs as-reported (data check): a real $500m classification difference
 node bin/fintel.js lseg basis IBM.N FY2022
-#   Standardized (COA)        : $33,295,000,000   (USD)
-#   As reported (filing)      : $33,795,000,000
-#   Variance                  : $-500,000,000   ✗ EXCEPTION (classification difference to investigate)
+#   Gross profit (standardized, COA)          : $33,295,000,000
+#   Gross profit (as reported)                : $33,795,000,000
+#   Variance                                  : $-500,000,000
+#   ✗ EXCEPTION — … does not tie to Gross profit (as reported) …; variance $-500,000,000
 
 # Bitemporal: the same period read as it was known before vs after a restatement
 node bin/fintel.js lseg reconcile IBM.N FY2021 --as-of 2022-06-01   # original vintage
@@ -162,7 +165,7 @@ Full technical detail: the [core README's LSEG section](fintelligence-core/READM
 cd fintelligence-core
 npm install
 npm run seed                      # build the demo warehouse
-npm test                          # 165 tests, no credential required
+npm test                          # 181 tests, no credential required
 
 export ANTHROPIC_API_KEY=...      # only planning and narration call a model
 node bin/fintel.js ask "How has MRR trended over the period?"
