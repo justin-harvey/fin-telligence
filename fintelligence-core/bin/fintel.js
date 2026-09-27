@@ -405,7 +405,10 @@ async function main() {
         case 'lseg': {
             const sub = rest[0];
             const signer = loadSigner();
-            const usdW = (v) => `$${Number(v).toLocaleString('en-US')}`;
+            // An absent figure is N/A, never "$0" — Number(null) is 0, and printing
+            // a missing field as zero is the NULL-vs-0 mistake P1 removed from the
+            // queries, reappearing on screen.
+            const usdW = (v) => (v == null ? 'N/A' : `$${Number(v).toLocaleString('en-US')}`);
             // A positional after the subcommand is the RIC; a second is the period.
             // Skip flags and the value each value-taking flag consumes, so e.g.
             // `--as-of 2022-06-01` does not leak its date into the RIC/period slots.
@@ -452,131 +455,30 @@ async function main() {
                     console.log('  signature       :', entry.signature ? `signed (key ${entry.signingKeyId})` : 'unsigned');
                     break;
                 }
-                case 'reconcile': {
-                    const { rows, lineage, entry } = reconcileGrossProfit({ ric, period, asOf, signer });
-                    const r = rows[0] ?? {};
-                    // Coverage first: an absent component (presence 0, or a NULL
-                    // field-keyed sum) is not computable — report N/A, never a
-                    // false PASS on a 0 that only means "we have no data".
-                    const absent = [
-                        ['Revenue', r.revenue_present],
-                        ['Cost of Revenue', r.cost_present],
-                        ['reported Gross Profit', r.gross_present],
-                    ].filter(([, count]) => !Number(count)).map(([label]) => label);
-                    // FX / basis gate: components must share currency, scale and
-                    // periodicity or the subtraction is meaningless.
-                    const mixed = [
-                        ['currency', r.currency_variants],
-                        ['scale', r.scale_variants],
-                        ['periodicity', r.periodicity_variants],
-                    ].filter(([, n]) => Number(n) > 1).map(([label]) => label);
-                    const identity = Number(r.identity_gross_usd);
-                    const reported = Number(r.reported_gross_usd);
-                    const variance = identity - reported;
-                    const isNA = absent.length > 0 || r.identity_gross_usd == null || r.reported_gross_usd == null;
-                    const isMixed = !isNA && mixed.length > 0;
-                    const status = isNA
-                        ? CONTROL_STATUS.NA
-                        : isMixed || variance !== 0
-                            ? CONTROL_STATUS.EXCEPTION
-                            : CONTROL_STATUS.PASS;
-                    console.log(`\n${ric} ${period} — gross profit reconciliation${asOf ? ` — as of ${asOf}` : ''}\n`);
-                    if (isNA) {
-                        const detail = absent.length > 0 ? `absent: ${absent.join(', ')}` : 'a required figure is absent';
-                        console.log(`  Coverage                  : ⚠ N/A   (${detail})`);
-                    } else if (isMixed) {
-                        console.log(`  Basis                     : ✗ EXCEPTION   cannot reconcile across mixed ${mixed.join(', ')} (normalise first)`);
-                    } else {
-                        console.log(`  Revenue − Cost of Revenue : ${usdW(identity)}   (${r.currency})`);
-                        console.log(`  Reported gross (TR.GrossProfit) : ${usdW(reported)}`);
-                        console.log(`  Variance                  : ${usdW(variance)}   ${variance === 0 ? '✓ PASS' : '✗ EXCEPTION'}`);
+                case 'reconcile':
+                case 'basis': {
+                    // Both commands ARE catalog controls, so run the control itself:
+                    // the CLI then reports exactly what the control asserts — one set
+                    // of gates (integrity, coverage, currency/scale/periodicity,
+                    // variance) and one evidence-packet shape — rather than a hand-kept
+                    // copy of that logic, which had to be patched twice for finding #8
+                    // and whose exported packet had already drifted in its wording.
+                    const id = sub === 'reconcile' ? 'PI1.1-lseg-gross-profit-reconciliation' : 'PI1.1-lseg-standardized-vs-as-reported';
+                    const title = sub === 'reconcile' ? 'gross profit reconciliation' : 'gross profit: standardized (COA) vs as-reported';
+                    const { control, rows, lineage, entry } = getControl(id).run({ ric, period, asOf, signer });
+                    const mark = { [CONTROL_STATUS.PASS]: '✓', [CONTROL_STATUS.EXCEPTION]: '✗', [CONTROL_STATUS.NA]: '⚠' }[control.status];
+                    console.log(`\n${ric} ${period} — ${title}${asOf ? ` — as of ${asOf}` : ''}\n`);
+                    for (const f of control.figures) {
+                        console.log(`  ${f.label.padEnd(42)}: ${f.unit === 'usd' ? usdW(f.value) : f.value}`);
                     }
+                    if (rows[0]?.currency) console.log(`  ${'Currency'.padEnd(42)}: ${rows[0].currency}`);
+                    console.log(`\n  ${mark} ${control.status}${control.exception ? ` — ${control.exception}` : ''}`);
                     console.log('\nProvenance');
                     console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
                     console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
                     console.log('  compliance tags :', entry.complianceTags.join(' · '));
                     const packet = exportPath(rest);
-                    if (packet) {
-                        let figures;
-                        let exception = null;
-                        if (isNA) {
-                            figures = [
-                                { label: 'Gross profit (Revenue − Cost of Revenue)', value: r.identity_gross_usd ?? null, unit: 'usd' },
-                                { label: 'Gross profit (reported, TR.GrossProfit)', value: r.reported_gross_usd ?? null, unit: 'usd' },
-                                { label: 'Coverage', value: `N/A — ${absent.length > 0 ? `absent: ${absent.join(', ')}` : 'a required figure is absent'}` },
-                            ];
-                        } else if (isMixed) {
-                            exception = `cannot reconcile across mixed ${mixed.join(', ')} — normalise to one currency/scale/periodicity first`;
-                            figures = [
-                                { label: 'Gross profit (Revenue − Cost of Revenue)', value: identity, unit: 'usd' },
-                                { label: 'Gross profit (reported, TR.GrossProfit)', value: reported, unit: 'usd' },
-                                { label: 'Basis', value: `mixed ${mixed.join(', ')}` },
-                            ];
-                        } else {
-                            if (variance !== 0) exception = `computed gross (${usdW(identity)}) does not tie to reported (${usdW(reported)}); variance ${usdW(variance)}`;
-                            figures = [
-                                { label: 'Gross profit (Revenue − Cost of Revenue)', value: identity, unit: 'usd' },
-                                { label: 'Gross profit (reported, TR.GrossProfit)', value: reported, unit: 'usd' },
-                                { label: 'Variance', value: variance, unit: 'usd' },
-                            ];
-                        }
-                        writePacket(packet, {
-                            rows,
-                            entry,
-                            publicKey: signer?.publicKey ?? null,
-                            control: controlResult({
-                                controlId: 'PI1.1',
-                                criterion: 'Processing Integrity — vendor figures reconcile to their component line items',
-                                description: `${ric} ${period} gross profit: Revenue − Cost of Revenue vs reported TR.GrossProfit.`,
-                                status,
-                                exception,
-                                figures,
-                            }),
-                        });
-                    }
-                    break;
-                }
-                case 'basis': {
-                    const { rows, lineage, entry } = reconcileStandardizedVsAsReported({ ric, period, asOf, signer });
-                    const r = rows[0] ?? {};
-                    // Coverage first, same discipline as reconcile: an absent
-                    // basis is N/A, never a false tie to zero.
-                    const absent = [
-                        ['standardized', r.standardized_present],
-                        ['as-reported', r.as_reported_present],
-                    ].filter(([, count]) => !Number(count)).map(([label]) => label);
-                    const mixed = [
-                        ['currency', r.currency_variants],
-                        ['scale', r.scale_variants],
-                        ['periodicity', r.periodicity_variants],
-                    ].filter(([, n]) => Number(n) > 1).map(([label]) => label);
-                    const standardized = Number(r.standardized_gross_usd);
-                    const asReported = Number(r.as_reported_gross_usd);
-                    const variance = standardized - asReported;
-                    const isNA = absent.length > 0 || r.standardized_gross_usd == null || r.as_reported_gross_usd == null;
-                    const isMixed = !isNA && mixed.length > 0;
-                    const status = isNA
-                        ? CONTROL_STATUS.NA
-                        : isMixed || variance !== 0
-                            ? CONTROL_STATUS.EXCEPTION
-                            : CONTROL_STATUS.PASS;
-                    console.log(`\n${ric} ${period} — gross profit: standardized (COA) vs as-reported${asOf ? ` — as of ${asOf}` : ''}\n`);
-                    if (isNA) {
-                        console.log(`  Coverage                  : ⚠ N/A   (absent: ${absent.join(', ')})`);
-                    } else if (isMixed) {
-                        console.log(`  Basis                     : ✗ EXCEPTION   cannot compare across mixed ${mixed.join(', ')} (normalise first)`);
-                    } else {
-                        console.log(`  Standardized (COA)        : ${usdW(standardized)}   (${r.currency})`);
-                        console.log(`  As reported (filing)      : ${usdW(asReported)}`);
-                        const verdict = variance === 0
-                            ? '✓ PASS (LSEG agrees with the filing)'
-                            : '✗ EXCEPTION (classification difference to investigate)';
-                        console.log(`  Variance                  : ${usdW(variance)}   ${verdict}`);
-                    }
-                    console.log('\nProvenance');
-                    console.log('  result hash     :', lineage.resultHash.slice(0, 32) + '…');
-                    console.log('  audit entry     : #' + entry.seq + '  ' + entry.hash.slice(0, 16) + '…');
-                    console.log('  compliance tags :', entry.complianceTags.join(' · '));
+                    if (packet) writePacket(packet, { control, rows, entry, publicKey: signer?.publicKey ?? null });
                     break;
                 }
                 case 'prices': {
@@ -629,8 +531,9 @@ async function main() {
                     try {
                         const result = ingestFundamentals({ session, universe, fields, period: ingestPeriod });
                         console.log(
-                            `Landed ${result.datapoints} datapoints across ${result.instruments} instrument(s). ` +
-                                `Run: fintel lseg reconcile ${universe[0]} ${ingestPeriod}`,
+                            `Landed ${result.datapoints} datapoints across ${result.instruments} instrument(s)` +
+                                (result.skipped > 0 ? `; ${result.skipped} already held at this vintage (same figure), skipped` : '') +
+                                `. Run: fintel lseg reconcile ${universe[0]} ${ingestPeriod}`,
                         );
                     } catch (error) {
                         console.error('Ingest halted:', error.message);
@@ -706,7 +609,7 @@ async function main() {
                     console.log('  fintel lseg retention [--as-of DATE] [--purge]   cache-TTL + licensing-tag governance (finding #7)');
                     console.log('  fintel lseg license                  show the per-source licensing/redistribution posture');
                     console.log('  fintel lseg audit                    verify the LSEG audit chain');
-                    console.log('    add --export <file.json|.md> to reconcile   write a verifiable evidence packet');
+                    console.log('    add --export <file.json|.md> to reconcile/basis   write a verifiable evidence packet');
                     process.exitCode = sub ? 2 : 0;
             }
             break;
