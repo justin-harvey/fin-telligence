@@ -1,10 +1,12 @@
-# LSEG hardening — handoff (continue from P6)
+# LSEG hardening — handoff (continue from P7)
 
-_Self-contained. Written 2026-09-26. Release commit `ddb9bb9` on `main` (repo
+_Self-contained. Written 2026-09-26. Base release `ddb9bb9` on `main`; **P6 is
+implemented in the working tree, 155 tests green, NOT yet committed** (repo
 `justin-harvey/fin-telligence`, clone `/home/nah/Claudia/fin-telligence`)._
 
 This picks up where `LSEG-ARCHITECTURE-REVIEW.md` (the master findings + backlog)
-left off. **P1–P5 are done, tested, and shipped.** Remaining: **P6, P7, P8**
+left off. **P1–P6 are done and tested** (P1–P5 shipped in `ddb9bb9`; P6 sits
+uncommitted in the working tree — commit/push when ready). Remaining: **P7, P8**
 plus a few cleanup items. Read the review for the full findings; this doc is the
 "what's true now + do next" for a fresh session.
 
@@ -48,7 +50,7 @@ plus a few cleanup items. Read the review for the full findings; this doc is the
 
 ---
 
-## What P1–P5 changed (so you don't re-derive it)
+## What P1–P6 changed (so you don't re-derive it)
 
 | # | What | Key surface |
 |---|------|-------------|
@@ -57,6 +59,7 @@ plus a few cleanup items. Read the review for the full findings; this doc is the
 | P3 | New **`basis`** dimension (`standardized`/`as_reported`) + `reconcileStandardizedVsAsReported` control that tests DATA; old identity control relabelled as pipeline-integrity/tamper; `/lseg` copy realigned to reconciliation + hash-chained audit (grounding removed from LSEG path); CLI `lseg basis` | `lseg-schema.sql`, `lseg.js`, `controls.js`, `bin/fintel.js`, `fintelligence/lseg.html` (+ root copy), `lseg-anchor.md` |
 | P4 | **PermID identifier model**: new `organizations` table keyed by real Org PermID; `instruments.ric` demoted to a mutable alias (`org_permid` FK); `fundamentals` re-keyed `ric` → `org_permid`; reads resolve RIC→org via `resolveOrgPermid` | `lseg-schema.sql`, `lseg.js`, `lseg-ingest.js`, `bin/fintel.js` |
 | P5 | **Field parameters** `scale`/`periodicity`/`reporting_state` on the grain; **FX guard**: reconciliations refuse (EXCEPTION) on mixed currency/scale/periodicity via `COUNT(DISTINCT …)` variant checks | `lseg-schema.sql`, `lseg.js`, `controls.js`, `lseg-ingest.js`, `bin/fintel.js` |
+| P6 | **Bitemporal** `knowledge_date` (transaction time) on the grain; restatements version (new row, not overwrite); reads take `asOf` (default `9999-12-31`=latest) injecting a correlated `MAX(knowledge_date)<=asOf` subquery → exactly one vintage per (org,field,period,basis), no double-count, pre-vintage→N/A; CLI `--as-of`; `verify()` intact across a restatement. Seed adds IBM.N FY2021 original+restated | `lseg-schema.sql`, `lseg.js`, `lseg-ingest.js`, `bin/fintel.js`, `db/lseg-anchor.md`, `test/lseg.test.js` |
 
 **Real Org PermIDs (validate before real ingest, like RICs/TR.* codes):**
 IBM `4295904307`, Apple `4295905573`, Vodafone Group `4295896661`.
@@ -80,48 +83,42 @@ IBM `4295904307`, Apple `4295905573`, Vodafone Group `4295896661`.
    so existing value assertions hold; introduce divergence only deliberately and
    label it synthetic (see IBM.N FY2022 as-reported $500m reclass).
 7. **Hand-sync `lseg.html`** root copy after editing `fintelligence/lseg.html`.
+8. **Bitemporal reads pick one vintage.** Any query aggregating field-keyed sums
+   over `fundamentals` must carry the `LATEST_VINTAGE_AS_OF` predicate (correlated
+   `MAX(knowledge_date) <= ?` per org/field/period/basis) or a restated field is
+   double-counted across vintages. Default `asOf` is the fixed sentinel
+   `AS_OF_LATEST` (`9999-12-31`), never `today` — a result hash must not drift
+   with the wall clock. New `fundamentals` rows must set `knowledge_date`.
 
 ---
 
 ## Remaining backlog
 
-### P6 — Bitemporal keys (#5)  · M effort · Med risk · **do next**
+### P6 — Bitemporal keys (#5)  · ✅ DONE 2026-09-26 (uncommitted)
 
-**Problem.** `fundamentals` has only `retrieved_at` (one timeline). There is no
-distinction between *period-end time* (what the figure is about) and *knowledge
-time* (when it was known/as-reported). Re-ingest appends/overwrites with no
-restatement versioning. Consequence: the CC7.3 "same result hash on re-run"
-reproducibility guarantee **breaks the first time LSEG restates a figure** — a
-legitimate restatement then reads like tampering in `verify()`.
+Added `knowledge_date` (transaction time) to `fundamentals`, distinct from
+`period` (valid time) and `retrieved_at` (when we landed it), plus a bitemporal
+index. Restatements version (new row, `reporting_state='restated'`, later
+`knowledge_date`) instead of overwriting. All three reads
+(`fundamentalsSnapshot`, `reconcileGrossProfit`, `reconcileStandardizedVsAsReported`)
+take an optional `asOf` (default sentinel `AS_OF_LATEST='9999-12-31'`) and inject
+the `LATEST_VINTAGE_AS_OF` correlated subquery, so exactly one vintage per
+(org,field,period,basis) is picked — no cross-vintage double-count, and an as-of
+before any vintage → N/A. `guard.asOf` was **not** reused: it injects a bare
+`knowledge_date <= v` cutoff at top level, which would return every vintage and
+double-count; the correlated `MAX(…)` subquery does cutoff + dedup in one and is
+guard-safe (no UNION). Seed adds IBM.N FY2021 original (known 2022-04-01) +
+restated (known 2023-05-15); ingest stamps `knowledge_date`; CLI gains
+`--as-of YYYY-MM-DD`. 5 new tests (155 total, green): as-of returns the right
+vintage, no double-count, ties at each vintage, pre-vintage N/A, and
+reproducibility + `verify()` intact across the restatement.
 
-**P5 already laid the seam:** `reporting_state` (`original`/`reported`/`restated`)
-exists on the row. P6 adds the *time* dimension and makes reads as-of-aware.
+Deferred (didn't do, out of P6 scope): `period_end_date` / fiscal-year-end
+calendarization — the `period` label already carries valid time, and faking
+precise period-end dates per issuer (IBM Dec, Apple Sep, Vodafone Mar) would
+overstate what's modelled. Note it if a future control needs true period-end dates.
 
-**Do.**
-- Add a **knowledge/as-of date** distinct from the period (e.g. `knowledge_date`
-  = when this value became known; keep `period` as the fiscal period, optionally
-  add `period_end_date`). Add to `LSEG_ALLOWED_COLUMNS`.
-- On restatement, **version** rather than overwrite: a new row with a later
-  `knowledge_date` and `reporting_state='restated'`, the prior row retained.
-- Reads default to **latest-known-as-of-now**; add an optional as-of parameter so
-  a figure can be reproduced *as it stood at a knowledge date*. The guard already
-  supports an `asOf` injection (`guard.js`) — consider reusing it, keyed on
-  `knowledge_date`, rather than hand-rolling.
-- Make reproducibility restatement-aware: an as-of query reproduces its hash; a
-  restatement is a *new* knowledge-time fact, not a mutation of the old one, so
-  `verify()` stays intact.
-
-**Acceptance.** Seed a period with an original + a later restated value; an as-of
-read before the restatement returns the original and reproduces its hash, an
-as-of read after returns the restated value, and `verify()` reports the chain
-intact across both (no false tamper). Add tests. 150 existing tests stay green.
-
-**Gotchas.** Keep the single-pass / no-UNION discipline. The snapshot and both
-reconciliations must pick exactly one row per (org, field, period) — the latest
-`knowledge_date` at-or-before the as-of — or the field-keyed sums double-count
-across restatement versions (same failure shape as the `basis` double-count).
-
-### P7 — `lseg-data` operational realities (#6)  · M effort · Med risk
+### P7 — `lseg-data` operational realities (#6)  · M effort · Med risk · **do next**
 
 Only meaningful against a live entitlement, but the seam should be honest.
 - **Entitlement-aware errors** in `scripts/lseg_fetch.py`: distinguish
@@ -159,7 +156,7 @@ tagging + retention/TTL controls on the warehouse. Largely a policy/sign-off tas
 
 ## Pointers
 
-- `LSEG-ARCHITECTURE-REVIEW.md` — master findings + backlog (P1–P5 checked off).
+- `LSEG-ARCHITECTURE-REVIEW.md` — master findings + backlog (P1–P6 checked off).
 - `fintelligence-core/db/lseg-anchor.md` — claim discipline, validated field/COA
   table, identifier model, the two reconciliations + FX guard.
 - `fintelligence-core/mcp/README.md` — lseg-mcp workflow + credential path

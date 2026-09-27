@@ -119,6 +119,17 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
    Consequence: the "same result hash on re-run" guarantee **breaks the first time LSEG restates** a
    figure — a legitimate restatement then reads like tampering in `verify()`. Fix: bitemporal keys
    (period date + knowledge date).
+   **[FIXED 2026-09-26 — P6]** Added `knowledge_date` (transaction time, distinct from `period` =
+   valid time and `retrieved_at` = when we landed it) to `fundamentals` + a bitemporal index. A
+   restatement is now a **new row** (later `knowledge_date`, `reporting_state='restated'`), never an
+   overwrite. All three reads take an optional `asOf` (default sentinel `9999-12-31` = latest known,
+   fixed so hashes don't drift with the clock) and inject a correlated `MAX(knowledge_date) <= asOf`
+   subquery — guard-safe, no UNION — so **exactly one vintage per (org, field, period, basis)** is
+   picked (no cross-vintage double-count; an as-of before any vintage → N/A, not a false 0). Seed adds
+   IBM.N FY2021 original (known 2022-04-01) + restated (known 2023-05-15); ingest stamps
+   `knowledge_date`. CLI: `--as-of YYYY-MM-DD` on fundamentals/reconcile/basis. Tests: an as-of read
+   reproduces its hash, the restated vintage differs, and `verify()` stays intact across both — the
+   restatement is a new knowledge-time fact, not tampering, so CC7.3 survives it.
 
 6. **`lseg-data` operational realities unhandled.**
    - **Entitlements are per-dataset/field**; `scripts/lseg_fetch.py` catches `get_data` errors
@@ -160,7 +171,7 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
 | ~~P3~~ ✅ | **Reframe the reconciliation (#3)** — DONE 2026-09-25 | Prototype **Standardized vs As-Reported** (add an `as_reported` value alongside the standardized COA value, reconcile them) so the control tests *data*, not a tautology. Update `/lseg` copy to match the guarantee actually exercised (reconciliation + audit, not grounding). | M | Med |
 | ~~P4~~ ✅ | **PermID identifier model (#1)** — DONE 2026-09-25 | Add `org_permid` (fundamentals) / quote PermID (pricing) as stable keys; RIC becomes an alias column. Migrate schema + seed + queries. | M | Med |
 | ~~P5~~ ✅ | **Field parameters on the grain (#2)** — DONE 2026-09-25 | Add `currency`, `scale`, `periodicity`, `reporting_state` to `fundamentals`; enforce single-currency in reconciliations (FX guard). | M | Med |
-| P6 | **Bitemporal keys (#5)** | Add knowledge/as-of date distinct from period date; version restatements; make reproducibility restatement-aware. | M | Med |
+| ~~P6~~ ✅ | **Bitemporal keys (#5)** — DONE 2026-09-26 | Added `knowledge_date` (transaction time) distinct from `period`; restatements version (new row, not overwrite); reads take an `asOf` picking exactly one vintage per (org,field,period,basis); reproducibility is restatement-aware (`verify()` intact across a restatement). CLI `--as-of`. | M | Med |
 | P7 | **`lseg-data` ops (#6)** | Entitlement-aware errors in `lseg_fetch.py`; move pricing to `get_history` at its own grain; batching + backoff + longer-lived session. | M | Med |
 | P8 | **Licensing/redistribution sign-off (#7)** | Usage tagging + retention/TTL; confirm caching/redistribution terms before a live key. | S (mostly non-code) | — |
 

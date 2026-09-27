@@ -107,6 +107,35 @@ reads as **N/A**, never a false PASS on a zero (coverage assertion), and mixed
 `fundamentals` row carries those field parameters (`currency`, `scale`,
 `periodicity`, `reporting_state`) so the guard has something real to check.
 
+## Bitemporal model — restatements without false tamper (finding #5)
+
+A fundamental has two time axes, and conflating them makes a legitimate
+restatement look like tampering:
+
+- **`period`** — the fiscal period the figure is *about* (valid time).
+- **`knowledge_date`** — when the vintage became *known* / as-reported
+  (transaction time): first publication, or a later republication when the
+  vendor restates. Distinct from `retrieved_at`, which is only when *we* pulled
+  the row into the warehouse.
+
+A restatement is a **new row** with a later `knowledge_date` and
+`reporting_state='restated'`, never an overwrite of the prior vintage. Reads
+default to the **latest vintage known as of now**; an **as-of** read
+(`fundamentalsSnapshot`/`reconcile*({ asOf })`, or `--as-of YYYY-MM-DD` on the
+CLI) reproduces a figure as it stood at a past knowledge date. Because the prior
+vintage is retained rather than mutated, the hash-chained audit stays intact
+across a restatement — a new knowledge-time fact, not an alteration of an old one
+— so **CC7.3 reproducibility survives the first time LSEG restates a number**.
+
+The reads pick **exactly one vintage per (org, field, period, basis)** — the
+`MAX(knowledge_date)` at or before the as-of date, via a correlated scalar
+subquery (no UNION, so the guard admits it). Without that, a restated field would
+be summed across both vintages, the same double-count shape the `basis` scope
+guards against but along the knowledge-time axis. An as-of *before* any known
+vintage returns nothing for that field, so it reads as **N/A**, never a spurious
+zero. (Synthetic seed: IBM.N **FY2021** carries an original vintage known
+2022-04-01 and a restatement known 2023-05-15 to exercise this path.)
+
 ## Fields held (all real LSEG `TR.*` codes; validated OK via lseg-mcp 2026-09-24)
 
 | Field code | Concept | Statement / Category | COA | Unit |

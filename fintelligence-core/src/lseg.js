@@ -49,6 +49,15 @@ export const LSEG_LOG_PATH = join(here, '..', 'db', 'lseg-audit.jsonl');
 export const DEFAULT_RIC = 'IBM.N';
 export const DEFAULT_PERIOD = 'FY2023';
 
+/**
+ * The default as-of (knowledge-time) cutoff: a fixed far-future sentinel meaning
+ * "the latest vintage known", used when a caller does not pin an as-of date. It
+ * is a constant, never `today`, on purpose — a reproducible result hash must not
+ * drift with the wall clock. An explicit as-of reproduces a figure as it stood
+ * at that knowledge date (see finding #5, the bitemporal model).
+ */
+export const AS_OF_LATEST = '9999-12-31';
+
 /** The source string every seeded datapoint carries (synthetic, no entitlement). */
 export const FEED_SOURCE =
     'LSEG synthetic snapshot (no entitlement) — validate TR.* field codes via lseg-mcp before real ingest';
@@ -61,7 +70,7 @@ export const LSEG_ALLOWED_COLUMNS = Object.freeze({
     organizations: ['org_permid', 'name', 'sector'],
     instruments: ['ric', 'org_permid', 'isin', 'exchange', 'currency'],
     lseg_fields: ['field_code', 'name', 'category', 'unit', 'description'],
-    fundamentals: ['id', 'org_permid', 'field_code', 'period', 'value', 'currency', 'basis', 'scale', 'periodicity', 'reporting_state', 'retrieved_at', 'source'],
+    fundamentals: ['id', 'org_permid', 'field_code', 'period', 'value', 'currency', 'basis', 'scale', 'periodicity', 'reporting_state', 'knowledge_date', 'retrieved_at', 'source'],
 });
 
 /** The reporting bases a fundamentals value can be aligned to (see schema). */
@@ -214,7 +223,29 @@ const AS_REPORTED = {
     },
 };
 
-/** The date the synthetic snapshot is stamped as retrieved. */
+/**
+ * A bitemporal restatement vintage to exercise finding #5. IBM.N FY2021's
+ * gross-profit block is published in one shape, then RESTATED later: two vintages
+ * of the same (org, field, period) on the standardized basis, distinguished only
+ * by `knowledge_date` and `reporting_state`. An as-of read before the restatement
+ * date reproduces the ORIGINAL figures (and their result hash); an as-of read
+ * after — and the default "latest" read — returns the RESTATED ones. The prior
+ * vintage is retained, never overwritten, so the hash-chained audit stays intact
+ * across the restatement instead of reading it as tampering. Both vintages
+ * satisfy the standardized identity Gross = Revenue − Cost. SYNTHETIC.
+ */
+const RESTATEMENTS = [
+    {
+        ric: 'IBM.N', period: 'FY2021', knowledgeDate: '2022-04-01', reportingState: 'original',
+        values: { 'TR.Revenue': 57_350_000_000, 'TR.CostOfRevenueTotal': 30_000_000_000, 'TR.GrossProfit': 27_350_000_000 },
+    },
+    {
+        ric: 'IBM.N', period: 'FY2021', knowledgeDate: '2023-05-15', reportingState: 'restated',
+        values: { 'TR.Revenue': 57_900_000_000, 'TR.CostOfRevenueTotal': 30_200_000_000, 'TR.GrossProfit': 27_700_000_000 },
+    },
+];
+
+/** The date the synthetic snapshot is stamped as retrieved (and first known). */
 const RETRIEVED_AT = '2024-03-31';
 
 /**
@@ -254,7 +285,7 @@ export function seedLseg(path = LSEG_DB_PATH) {
         'INSERT INTO lseg_fields (field_code, name, category, unit, description) VALUES (?,?,?,?,?)',
     );
     const insertFact = db.prepare(
-        'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, basis, scale, periodicity, reporting_state, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, basis, scale, periodicity, reporting_state, knowledge_date, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
     );
 
     for (const o of ORGANIZATIONS) insertOrg.run(o.orgPermid, o.name, o.sector);
@@ -273,9 +304,11 @@ export function seedLseg(path = LSEG_DB_PATH) {
             const currency = byRicCcy.get(ric);
             for (const [period, values] of Object.entries(byPeriod)) {
                 // Synthetic values are stored raw (scale 0), single-currency, as
-                // last reported; periodicity is read off the period label.
+                // last reported; periodicity is read off the period label. The
+                // baseline snapshot's knowledge_date is the retrieval date — a
+                // single vintage, so the latest-as-of read returns it unchanged.
                 for (const [code, value] of Object.entries(values)) {
-                    insertFact.run(orgPermid, code, period, value, currency, basis, 0, periodicityOf(period), 'reported', RETRIEVED_AT, FEED_SOURCE);
+                    insertFact.run(orgPermid, code, period, value, currency, basis, 0, periodicityOf(period), 'reported', RETRIEVED_AT, RETRIEVED_AT, FEED_SOURCE);
                     datapoints += 1;
                 }
             }
@@ -283,6 +316,19 @@ export function seedLseg(path = LSEG_DB_PATH) {
     };
     seedBasis(FUNDAMENTALS, BASIS_STANDARDIZED);
     seedBasis(AS_REPORTED, BASIS_AS_REPORTED);
+
+    // Bitemporal restatement vintages (finding #5): two vintages of the same
+    // (org, field, period) on the standardized basis, differing only by
+    // knowledge_date / reporting_state, so an as-of read reproduces the vintage
+    // that was known at that knowledge date.
+    for (const v of RESTATEMENTS) {
+        const orgPermid = byRicOrg.get(v.ric);
+        const currency = byRicCcy.get(v.ric);
+        for (const [code, value] of Object.entries(v.values)) {
+            insertFact.run(orgPermid, code, v.period, value, currency, BASIS_STANDARDIZED, 0, periodicityOf(v.period), v.reportingState, v.knowledgeDate, RETRIEVED_AT, FEED_SOURCE);
+            datapoints += 1;
+        }
+    }
 
     db.close();
     return { organizations: ORGANIZATIONS.length, instruments: INSTRUMENTS.length, fields: FIELDS.length, datapoints };
@@ -309,6 +355,31 @@ function resolveOrgPermid(ric, warehouse) {
 }
 
 /**
+ * The bitemporal filter: keep only each field's latest vintage known at or before
+ * an as-of knowledge date (finding #5). Without it, a field that has been restated
+ * has two rows for the same (org, field, period, basis), and the field-keyed sums
+ * would add both vintages together — the same double-count shape the `basis` scope
+ * guards against, but along the knowledge-time axis.
+ *
+ * A correlated scalar subquery picks `MAX(knowledge_date) <= ?` for the row's own
+ * (org, field, period, basis) group, so exactly one vintage survives: the most
+ * recent one that was known by the as-of date. A group whose earliest vintage is
+ * *after* the as-of date matches nothing (its MAX is NULL) — correctly, we did not
+ * know that figure yet — so it reads as N/A downstream rather than as a zero.
+ *
+ * It is a scalar subquery, not a UNION, so the guard's column allow-list admits it
+ * (the alias `f2` and the outer real-table qualifier both reference only
+ * allow-listed columns). The single `?` binds the as-of date; it appears after the
+ * outer WHERE's placeholders in statement text, so callers append it to `params`
+ * last. Same-table alias `f2` disambiguates the correlation from the outer row.
+ */
+const LATEST_VINTAGE_AS_OF =
+    'knowledge_date = (SELECT MAX(knowledge_date) FROM fundamentals f2 ' +
+    'WHERE f2.org_permid = fundamentals.org_permid AND f2.field_code = fundamentals.field_code ' +
+    'AND f2.period = fundamentals.period AND f2.basis = fundamentals.basis ' +
+    'AND f2.knowledge_date <= ?)';
+
+/**
  * Scenario 1 — a fundamentals snapshot for one instrument/period.
  *
  * Computes the key line items in one guarded query, each resolved to its blessed
@@ -327,6 +398,7 @@ function resolveOrgPermid(ric, warehouse) {
 export function fundamentalsSnapshot({
     ric = DEFAULT_RIC,
     period = DEFAULT_PERIOD,
+    asOf = AS_OF_LATEST,
     dbPath = LSEG_DB_PATH,
     logPath = LSEG_LOG_PATH,
     signer = null,
@@ -344,16 +416,21 @@ export function fundamentalsSnapshot({
         `${LSEG_REGISTRY.resolve('total_debt_usd').sql} AS total_debt_usd ` +
         // The snapshot is the standardized (COA) model; as-reported rows live at
         // the same grain and would otherwise double-count each field-keyed sum.
-        'FROM fundamentals WHERE org_permid = ? AND period = ? AND basis = ?';
+        // The as-of filter keeps only the latest vintage of each field known by
+        // the knowledge date, so a restated field is not summed twice either.
+        `FROM fundamentals WHERE org_permid = ? AND period = ? AND basis = ? AND ${LATEST_VINTAGE_AS_OF}`;
     const guarded = guard(sql, guardOptions);
-    const rows = warehouse.query(guarded.sql, { params: [orgPermid, period, BASIS_STANDARDIZED] });
+    const rows = warehouse.query(guarded.sql, { params: [orgPermid, period, BASIS_STANDARDIZED, asOf] });
 
     const lineage = buildLineage({
-        question: `${ric} ${period} fundamentals snapshot (LSEG TR.* fields)`,
+        question:
+            `${ric} ${period} fundamentals snapshot (LSEG TR.* fields)` +
+            (asOf === AS_OF_LATEST ? '' : ` as of ${asOf}`),
         sql: guarded.sql,
         tables: guarded.tables,
         rows,
         limitInjected: guarded.limitInjected,
+        asOf: asOf === AS_OF_LATEST ? null : asOf,
     });
     const entry = append({ ...lineage, scenario: 'lseg_fundamentals_snapshot', ric, period }, {
         path: logPath,
@@ -400,6 +477,7 @@ export function fundamentalsSnapshot({
 export function reconcileGrossProfit({
     ric = DEFAULT_RIC,
     period = DEFAULT_PERIOD,
+    asOf = AS_OF_LATEST,
     dbPath = LSEG_DB_PATH,
     logPath = LSEG_LOG_PATH,
     signer = null,
@@ -432,16 +510,21 @@ export function reconcileGrossProfit({
         `${variantsOf('scale')} AS scale_variants, ` +
         `${variantsOf('periodicity')} AS periodicity_variants, ` +
         `MAX(CASE WHEN field_code = 'TR.Revenue' THEN currency END) AS currency ` +
-        'FROM fundamentals WHERE org_permid = ? AND period = ? AND basis = ?';
+        // Latest vintage per field known by the as-of date, so a restated
+        // component is counted once, not summed across its vintages.
+        `FROM fundamentals WHERE org_permid = ? AND period = ? AND basis = ? AND ${LATEST_VINTAGE_AS_OF}`;
     const guarded = guard(sql, guardOptions);
-    const rows = warehouse.query(guarded.sql, { params: [orgPermid, period, BASIS_STANDARDIZED] });
+    const rows = warehouse.query(guarded.sql, { params: [orgPermid, period, BASIS_STANDARDIZED, asOf] });
 
     const lineage = buildLineage({
-        question: `${ric} ${period} gross profit: Revenue − Cost of Revenue reconciled to reported TR.GrossProfit (standardized/COA basis)`,
+        question:
+            `${ric} ${period} gross profit: Revenue − Cost of Revenue reconciled to reported TR.GrossProfit (standardized/COA basis)` +
+            (asOf === AS_OF_LATEST ? '' : ` as of ${asOf}`),
         sql: guarded.sql,
         tables: guarded.tables,
         rows,
         limitInjected: guarded.limitInjected,
+        asOf: asOf === AS_OF_LATEST ? null : asOf,
     });
     const entry = append({ ...lineage, scenario: 'lseg_gross_profit_reconciliation', ric, period }, {
         path: logPath,
@@ -482,6 +565,7 @@ export function reconcileGrossProfit({
 export function reconcileStandardizedVsAsReported({
     ric = DEFAULT_RIC,
     period = DEFAULT_PERIOD,
+    asOf = AS_OF_LATEST,
     dbPath = LSEG_DB_PATH,
     logPath = LSEG_LOG_PATH,
     signer = null,
@@ -504,16 +588,21 @@ export function reconcileStandardizedVsAsReported({
         `${variantsOf('scale')} AS scale_variants, ` +
         `${variantsOf('periodicity')} AS periodicity_variants, ` +
         `MAX(CASE WHEN field_code = 'TR.GrossProfit' THEN currency END) AS currency ` +
-        'FROM fundamentals WHERE org_permid = ? AND period = ?';
+        // The as-of filter correlates on basis, so each basis independently keeps
+        // its latest vintage known by the knowledge date (no cross-vintage sum).
+        `FROM fundamentals WHERE org_permid = ? AND period = ? AND ${LATEST_VINTAGE_AS_OF}`;
     const guarded = guard(sql, guardOptions);
-    const rows = warehouse.query(guarded.sql, { params: [orgPermid, period] });
+    const rows = warehouse.query(guarded.sql, { params: [orgPermid, period, asOf] });
 
     const lineage = buildLineage({
-        question: `${ric} ${period} gross profit: LSEG standardized (COA) reconciled to as-reported`,
+        question:
+            `${ric} ${period} gross profit: LSEG standardized (COA) reconciled to as-reported` +
+            (asOf === AS_OF_LATEST ? '' : ` as of ${asOf}`),
         sql: guarded.sql,
         tables: guarded.tables,
         rows,
         limitInjected: guarded.limitInjected,
+        asOf: asOf === AS_OF_LATEST ? null : asOf,
     });
     const entry = append({ ...lineage, scenario: 'lseg_standardized_vs_as_reported', ric, period }, {
         path: logPath,

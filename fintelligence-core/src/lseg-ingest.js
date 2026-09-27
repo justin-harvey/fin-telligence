@@ -243,7 +243,7 @@ export function ingestFundamentals({
             "INSERT OR IGNORE INTO instruments (ric, org_permid, isin, exchange, currency) VALUES (?, ?, NULL, '', 'USD')",
         );
         const insertFact = db.prepare(
-            'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, scale, periodicity, reporting_state, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, scale, periodicity, reporting_state, knowledge_date, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         );
 
         const seenInstruments = new Set();
@@ -267,11 +267,14 @@ export function ingestFundamentals({
             const p = row.period ?? period;
             // Synthetic seam: values arrive raw (scale 0) as last reported.
             // Periodicity is read off the period; real data carries Scale/Curn/
-            // ReportingState from the request, to be threaded through here.
+            // ReportingState from the request, to be threaded through here. The
+            // knowledge_date — when this vintage became known (finding #5) —
+            // defaults to the retrieval date; a live feed would carry the
+            // vendor's as-reported/restatement date to distinguish the two.
             for (const field of fields) {
                 const value = row[field];
                 if (value == null) continue;
-                insertFact.run(orgPermid, field, p, value, currencyOf.get(ric), 0, periodicityOf(p), 'reported', retrievedAt, source);
+                insertFact.run(orgPermid, field, p, value, currencyOf.get(ric), 0, periodicityOf(p), 'reported', retrievedAt, retrievedAt, source);
                 datapoints += 1;
             }
         }

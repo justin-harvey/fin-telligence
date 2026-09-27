@@ -21,6 +21,12 @@ import {
     LSEG_ALLOWED_COLUMNS,
 } from '../src/lseg.js';
 
+// Knowledge dates bracketing the seeded IBM.N FY2021 restatement (original known
+// 2022-04-01, restated 2023-05-15), for the bitemporal (as-of) tests.
+const BEFORE_RESTATEMENT = '2022-06-01';
+const AFTER_RESTATEMENT = '2023-06-01';
+const BEFORE_ANY_VINTAGE = '2020-01-01';
+
 const DIR = mkdtempSync(join(tmpdir(), 'fintel-lseg-'));
 const DB_PATH = join(DIR, 'lseg.db');
 seedLseg(DB_PATH);
@@ -39,8 +45,9 @@ test('the lseg seed is deterministic in shape', () => {
     assert.equal(result.instruments, 3);
     assert.equal(result.fields, 9);
     // 36 standardized (COA) datapoints + 12 as-reported gross-profit-block rows
-    // (Revenue/Cost/Gross × 4 instrument-periods).
-    assert.equal(result.datapoints, 48);
+    // (Revenue/Cost/Gross × 4 instrument-periods) + 6 bitemporal restatement rows
+    // (IBM.N FY2021 gross-profit block × 2 vintages).
+    assert.equal(result.datapoints, 54);
 });
 
 test('the IBM.N FY2023 snapshot resolves each concept to its blessed LSEG field', () => {
@@ -179,6 +186,70 @@ test('both scenarios reproduce the same result hash', () => {
     const c = reconcileGrossProfit({ dbPath: DB_PATH, logPath: freshLog() });
     const d = reconcileGrossProfit({ dbPath: DB_PATH, logPath: freshLog() });
     assert.equal(c.lineage.resultHash, d.lineage.resultHash);
+});
+
+test('an as-of read returns the vintage known at that knowledge date (bitemporal, P6)', () => {
+    // IBM.N FY2021 was restated: original (Rev 57.35bn / Gross 27.35bn) known
+    // 2022-04-01, restated (Rev 57.90bn / Gross 27.70bn) known 2023-05-15.
+    const before = fundamentalsSnapshot({ ric: 'IBM.N', period: 'FY2021', asOf: BEFORE_RESTATEMENT, dbPath: DB_PATH, logPath: freshLog() }).rows[0];
+    assert.equal(before.revenue_usd, 57_350_000_000, 'before the restatement date, the original vintage');
+    assert.equal(before.gross_profit_usd, 27_350_000_000);
+
+    const after = fundamentalsSnapshot({ ric: 'IBM.N', period: 'FY2021', asOf: AFTER_RESTATEMENT, dbPath: DB_PATH, logPath: freshLog() }).rows[0];
+    assert.equal(after.revenue_usd, 57_900_000_000, 'after it, the restated vintage');
+    assert.equal(after.gross_profit_usd, 27_700_000_000);
+
+    // The default read (no as-of) is the latest vintage known.
+    const latest = fundamentalsSnapshot({ ric: 'IBM.N', period: 'FY2021', dbPath: DB_PATH, logPath: freshLog() }).rows[0];
+    assert.equal(latest.revenue_usd, 57_900_000_000, 'default read is latest-known');
+});
+
+test('field-keyed sums pick exactly one vintage — a restatement is not double-counted (P6)', () => {
+    // Both an original and a restated Revenue row exist for FY2021; a naive sum
+    // over the field would add them (57.35bn + 57.90bn). The latest-vintage
+    // filter must return exactly one — the restated 57.90bn — at the default read.
+    const r = fundamentalsSnapshot({ ric: 'IBM.N', period: 'FY2021', dbPath: DB_PATH, logPath: freshLog() }).rows[0];
+    assert.equal(r.revenue_usd, 57_900_000_000);
+    assert.notEqual(r.revenue_usd, 57_350_000_000 + 57_900_000_000, 'the two vintages must not be summed');
+});
+
+test('the reconciliation ties at each vintage on the standardized identity (P6)', () => {
+    const before = reconcileGrossProfit({ ric: 'IBM.N', period: 'FY2021', asOf: BEFORE_RESTATEMENT, dbPath: DB_PATH, logPath: freshLog() }).rows[0];
+    assert.equal(before.identity_gross_usd, 27_350_000_000);
+    assert.equal(before.identity_gross_usd, before.reported_gross_usd, 'original vintage: Revenue − Cost ties to reported gross');
+
+    const after = reconcileGrossProfit({ ric: 'IBM.N', period: 'FY2021', dbPath: DB_PATH, logPath: freshLog() }).rows[0];
+    assert.equal(after.identity_gross_usd, 27_700_000_000);
+    assert.equal(after.identity_gross_usd, after.reported_gross_usd, 'restated vintage: still ties');
+});
+
+test('an as-of before any known vintage reads as N/A, not a spurious zero (P6)', () => {
+    // We did not know FY2021 figures in 2020, so the honest answer is "no data",
+    // surfaced as presence 0 / NULL — the same coverage discipline as a missing row.
+    const r = reconcileGrossProfit({ ric: 'IBM.N', period: 'FY2021', asOf: BEFORE_ANY_VINTAGE, dbPath: DB_PATH, logPath: freshLog() }).rows[0];
+    assert.equal(r.revenue_present, 0, 'nothing was known yet at this as-of');
+    assert.equal(r.identity_gross_usd, null, 'absent, not a false 0');
+    assert.equal(r.reported_gross_usd, null);
+});
+
+test('an as-of read reproduces its hash and a restatement is not read as tampering (P6)', () => {
+    // The reproducibility guarantee (CC7.3) must survive a restatement: re-running
+    // the same as-of query reproduces its hash, the restated vintage produces a
+    // different hash, and both attestations land in one audit chain that verifies
+    // intact — a restatement is a new knowledge-time fact, not a mutation.
+    const logPath = freshLog();
+    const first = reconcileGrossProfit({ ric: 'IBM.N', period: 'FY2021', asOf: BEFORE_RESTATEMENT, dbPath: DB_PATH, logPath });
+    const second = reconcileGrossProfit({ ric: 'IBM.N', period: 'FY2021', asOf: BEFORE_RESTATEMENT, dbPath: DB_PATH, logPath });
+    assert.equal(first.lineage.resultHash, second.lineage.resultHash, 'same as-of reproduces the same hash');
+
+    const restated = reconcileGrossProfit({ ric: 'IBM.N', period: 'FY2021', dbPath: DB_PATH, logPath });
+    assert.notEqual(first.lineage.resultHash, restated.lineage.resultHash, 'the restated vintage is a distinct figure');
+
+    // The as-of that was pinned is recorded on the lineage; the default is not.
+    assert.equal(first.lineage.asOf, BEFORE_RESTATEMENT);
+    assert.equal(restated.lineage.asOf, null);
+
+    assert.ok(verify(logPath).ok, 'the audit chain verifies intact across the restatement');
 });
 
 test('an attestation is recorded with provenance and compliance tags', () => {

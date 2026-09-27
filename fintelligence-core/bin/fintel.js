@@ -405,9 +405,24 @@ async function main() {
             const signer = loadSigner();
             const usdW = (v) => `$${Number(v).toLocaleString('en-US')}`;
             // A positional after the subcommand is the RIC; a second is the period.
-            const positional = rest.slice(1).filter((a) => !a.startsWith('--'));
+            // Skip flags and the value each value-taking flag consumes, so e.g.
+            // `--as-of 2022-06-01` does not leak its date into the RIC/period slots.
+            const VALUE_FLAGS = new Set(['--as-of', '--export', '--period', '--app-key']);
+            const positional = [];
+            for (let i = 1; i < rest.length; i++) {
+                const a = rest[i];
+                if (a.startsWith('--')) {
+                    if (VALUE_FLAGS.has(a)) i += 1;
+                    continue;
+                }
+                positional.push(a);
+            }
             const ric = positional[0] || DEFAULT_RIC;
             const period = positional[1] || DEFAULT_PERIOD;
+            // As-of (knowledge-time) cutoff for the read scenarios; omitted means
+            // the latest vintage known (the AS_OF_LATEST sentinel in lseg.js).
+            const asOfIdx = rest.indexOf('--as-of');
+            const asOf = asOfIdx >= 0 ? rest[asOfIdx + 1] : undefined;
             switch (sub) {
                 case 'seed': {
                     const result = seedLseg();
@@ -420,9 +435,9 @@ async function main() {
                     break;
                 }
                 case 'fundamentals': {
-                    const { rows, lineage, entry } = fundamentalsSnapshot({ ric, period, signer });
+                    const { rows, lineage, entry } = fundamentalsSnapshot({ ric, period, asOf, signer });
                     const r = rows[0] ?? {};
-                    console.log(`\n${ric} ${period} — fundamentals snapshot (LSEG TR.* fields)\n`);
+                    console.log(`\n${ric} ${period} — fundamentals snapshot (LSEG TR.* fields)${asOf ? ` — as of ${asOf}` : ''}\n`);
                     console.log(`  Revenue            : ${usdW(r.revenue_usd)}   (TR.Revenue)`);
                     console.log(`  Cost of revenue    : ${usdW(r.cost_of_revenue_usd)}   (TR.CostOfRevenueTotal)`);
                     console.log(`  Gross profit       : ${usdW(r.gross_profit_usd)}   (TR.GrossProfit)`);
@@ -436,7 +451,7 @@ async function main() {
                     break;
                 }
                 case 'reconcile': {
-                    const { rows, lineage, entry } = reconcileGrossProfit({ ric, period, signer });
+                    const { rows, lineage, entry } = reconcileGrossProfit({ ric, period, asOf, signer });
                     const r = rows[0] ?? {};
                     // Coverage first: an absent component (presence 0, or a NULL
                     // field-keyed sum) is not computable — report N/A, never a
@@ -463,7 +478,7 @@ async function main() {
                         : isMixed || variance !== 0
                             ? CONTROL_STATUS.EXCEPTION
                             : CONTROL_STATUS.PASS;
-                    console.log(`\n${ric} ${period} — gross profit reconciliation\n`);
+                    console.log(`\n${ric} ${period} — gross profit reconciliation${asOf ? ` — as of ${asOf}` : ''}\n`);
                     if (isNA) {
                         const detail = absent.length > 0 ? `absent: ${absent.join(', ')}` : 'a required figure is absent';
                         console.log(`  Coverage                  : ⚠ N/A   (${detail})`);
@@ -520,7 +535,7 @@ async function main() {
                     break;
                 }
                 case 'basis': {
-                    const { rows, lineage, entry } = reconcileStandardizedVsAsReported({ ric, period, signer });
+                    const { rows, lineage, entry } = reconcileStandardizedVsAsReported({ ric, period, asOf, signer });
                     const r = rows[0] ?? {};
                     // Coverage first, same discipline as reconcile: an absent
                     // basis is N/A, never a false tie to zero.
@@ -543,7 +558,7 @@ async function main() {
                         : isMixed || variance !== 0
                             ? CONTROL_STATUS.EXCEPTION
                             : CONTROL_STATUS.PASS;
-                    console.log(`\n${ric} ${period} — gross profit: standardized (COA) vs as-reported\n`);
+                    console.log(`\n${ric} ${period} — gross profit: standardized (COA) vs as-reported${asOf ? ` — as of ${asOf}` : ''}\n`);
                     if (isNA) {
                         console.log(`  Coverage                  : ⚠ N/A   (absent: ${absent.join(', ')})`);
                     } else if (isMixed) {
@@ -619,6 +634,7 @@ async function main() {
                     console.log('  fintel lseg fundamentals [RIC] [FY]  attested fundamentals snapshot (default IBM.N FY2023)');
                     console.log('  fintel lseg reconcile [RIC] [FY]     gross profit = Revenue − Cost of Revenue, attested (standardized integrity)');
                     console.log('  fintel lseg basis [RIC] [FY]         standardized (COA) gross profit vs as-reported, attested');
+                    console.log('    add --as-of YYYY-MM-DD to fundamentals/reconcile/basis   read the vintage known at that knowledge date');
                     console.log('  fintel lseg ingest [RIC...] [--period FY2024] [--live] [--app-key KEY]   land data via the ingest seam');
                     console.log('    --live needs an LSEG entitlement: set LSEG_APP_KEY (or pass --app-key) + install lseg-data');
                     console.log('  fintel lseg audit                    verify the LSEG audit chain');

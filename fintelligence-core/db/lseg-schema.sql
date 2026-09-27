@@ -105,22 +105,41 @@ CREATE TABLE lseg_fields (
 --                     scale is a 10^n magnitude error waiting to happen.
 --   periodicity     — the `Period` shape: 'FY' (annual) | 'FQ' (quarter) | 'LTM'
 --                     (trailing twelve months). You cannot reconcile across these.
---   reporting_state — 'original' | 'reported' | 'restated'. The seam for
---                     restatement handling (the bitemporal model is finding #5).
+--   reporting_state — 'original' | 'reported' | 'restated'. Which vintage of the
+--                     figure this row is (see the bitemporal model below).
+--
+-- Bitemporal model (finding #5). A fundamental has two time axes, and conflating
+-- them is what makes a legitimate restatement look like tampering:
+--   period          — the fiscal period the figure is ABOUT (valid time).
+--   knowledge_date  — the date the figure became KNOWN / as-reported (transaction
+--                     time): when the vendor first published it, or republished a
+--                     restatement. Distinct from `retrieved_at`, which is merely
+--                     when WE pulled the row into this warehouse.
+-- A restatement is a NEW row with a later `knowledge_date` and
+-- `reporting_state='restated'`, never an overwrite of the prior vintage. Reads
+-- default to the latest vintage known as of now; an as-of read reproduces a
+-- figure as it stood at a past knowledge date (see lseg.js). Because the prior
+-- vintage is retained rather than mutated, the hash-chained audit stays intact
+-- across a restatement — a new knowledge-time fact, not an alteration of an old
+-- one — so CC7.3 reproducibility survives the first time LSEG restates a number.
 CREATE TABLE fundamentals (
     id           INTEGER PRIMARY KEY,
     org_permid   TEXT    NOT NULL REFERENCES organizations(org_permid),
     field_code   TEXT    NOT NULL REFERENCES lseg_fields(field_code),
-    period       TEXT    NOT NULL,   -- 'FY2023', 'FY2022', ... (Financial Period Absolute)
+    period       TEXT    NOT NULL,   -- 'FY2023', 'FY2022', ... (Financial Period Absolute) — VALID time
     value        INTEGER NOT NULL,   -- in lseg_fields.unit, before `scale`
     currency     TEXT    NOT NULL,   -- `Curn` — currency of a monetary value, else the org's reporting currency
     basis        TEXT    NOT NULL DEFAULT 'standardized',  -- 'standardized' (COA) | 'as_reported' (filing)
     scale        INTEGER NOT NULL DEFAULT 0,               -- `Scale`: actual = value * 10^scale
     periodicity  TEXT    NOT NULL DEFAULT 'FY',            -- 'FY' | 'FQ' | 'LTM'
     reporting_state TEXT NOT NULL DEFAULT 'reported',      -- 'original' | 'reported' | 'restated'
-    retrieved_at TEXT    NOT NULL,   -- ISO-8601 date the datapoint was landed
+    knowledge_date  TEXT NOT NULL,   -- ISO-8601 date this vintage became known (TRANSACTION time)
+    retrieved_at TEXT    NOT NULL,   -- ISO-8601 date the datapoint was landed in this warehouse
     source       TEXT    NOT NULL    -- the feed/entitlement it was pulled from
 );
 
 CREATE INDEX idx_fund_org_period ON fundamentals(org_permid, period, basis);
 CREATE INDEX idx_fund_field      ON fundamentals(field_code);
+-- Supports the latest-vintage-as-of lookup: MAX(knowledge_date) per (org, field,
+-- period, basis) at or before an as-of cutoff.
+CREATE INDEX idx_fund_bitemporal ON fundamentals(org_permid, field_code, period, basis, knowledge_date);
