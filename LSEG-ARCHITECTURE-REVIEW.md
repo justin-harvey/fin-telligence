@@ -155,6 +155,15 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
 7. **Licensing / redistribution / caching compliance.** The design persists LSEG data to a snapshot
    warehouse. Inside the LSEG unit this is a real question: display vs non-display usage, caching
    TTLs, redistribution terms. No usage-tagging or retention control. Sign off before a live key.
+   **[FIXED 2026-09-26 — P8]** New `data_sources` table tags each source once (not per row — also
+   closes the "per-row constant duplication" cleanup) with `usage_class` (display/non-display),
+   `retention_days` (cache TTL) and `redistribution` terms. `src/lseg-retention.js` reports, per
+   source, rows held past TTL (on `retrieved_at`), untagged sources, and TTL-less policies, and
+   `purgeExpired` deletes stale rows (dry-run option). The `C1.1-lseg-data-retention` control turns
+   this into PASS/EXCEPTION evidence; ingest registers its source's policy so nothing lands untagged;
+   CLI `fintel lseg retention [--as-of DATE] [--purge]` + `fintel lseg license`. The sign-off checklist
+   (display vs non-display, TTL, redistribution, entitlement scope, identifier validity) is
+   `db/lseg-licensing.md`. Tags encode policy, they don't grant a right — sign off real terms first.
 
 ### Redundant / over-engineered
 
@@ -171,6 +180,7 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
   `CompanyMarketCap` are dead weight vs the single control. Add controls that use them (balance-sheet
   identity, leverage, margins) or trim.
 - **Per-row `source`/`currency` duplication** — constant per batch/instrument; normalize if it grows (minor).
+  (Partly addressed: `source` policy now lives once in `data_sources` — P8.)
 
 ---
 
@@ -185,9 +195,15 @@ Session-interface seam (`Fake`/`Real` `LsegSession`), field-code validation at i
 | ~~P5~~ ✅ | **Field parameters on the grain (#2)** — DONE 2026-09-25 | Add `currency`, `scale`, `periodicity`, `reporting_state` to `fundamentals`; enforce single-currency in reconciliations (FX guard). | M | Med |
 | ~~P6~~ ✅ | **Bitemporal keys (#5)** — DONE 2026-09-26 | Added `knowledge_date` (transaction time) distinct from `period`; restatements version (new row, not overwrite); reads take an `asOf` picking exactly one vintage per (org,field,period,basis); reproducibility is restatement-aware (`verify()` intact across a restatement). CLI `--as-of`. | M | Med |
 | ~~P7~~ ✅ | **`lseg-data` ops (#6)** — DONE 2026-09-26 | Entitlement-aware error `kind` classification in `lseg_fetch.py`; pricing moved to `get_history` at its own grain (`quote_permid` + `prices` table, ingest guards both ways); one session + universe chunking + transport backoff. | M | Med |
-| P8 | **Licensing/redistribution sign-off (#7)** | Usage tagging + retention/TTL; confirm caching/redistribution terms before a live key. | S (mostly non-code) | — |
+| ~~P8~~ ✅ | **Licensing/redistribution sign-off (#7)** — DONE 2026-09-26 | `data_sources` usage/TTL/redistribution tags + `lseg-retention.js` report/purge + `C1.1` control + `db/lseg-licensing.md` sign-off checklist. | S (mostly non-code) | — |
 
 **Quickest wins with no demo risk: P1 and P2.** Most interview-valuable: **P3**.
+
+> **STATUS 2026-09-26: the entire P1–P8 backlog is complete** (P1–P6 shipped; P7 +
+> P8 on `main`). 165 core tests, all offline, green. Release anchor
+> `v0.7.0-lseg-p7` marks P1–P7; P8 lands on top. What remains is opportunistic
+> cleanup (below) and the whole-project M7 deploy in `HANDOFF.md` — no open LSEG
+> findings.
 
 ---
 

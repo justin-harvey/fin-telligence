@@ -51,6 +51,8 @@ test('the lseg seed is deterministic in shape', () => {
     assert.equal(result.datapoints, 50);
     // Pricing at its own grain: 3 daily closes × 3 instruments.
     assert.equal(result.prices, 9);
+    // One licensing/retention policy row for the synthetic source.
+    assert.equal(result.sources, 1);
 });
 
 test('the IBM.N FY2023 snapshot resolves each concept to its blessed LSEG field', () => {

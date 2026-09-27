@@ -62,8 +62,36 @@ export const AS_OF_LATEST = '9999-12-31';
 export const FEED_SOURCE =
     'LSEG synthetic snapshot (no entitlement) — validate TR.* field codes via lseg-mcp before real ingest';
 
+/**
+ * The default cache-retention TTL, in days, for persisted vendor data (finding
+ * #7). A snapshot warehouse holds vendor values, so "how long may we cache this"
+ * is a licensing question; this is the default a source is tagged with when a
+ * caller does not set one. Illustrative only — the real number comes from the
+ * signed LSEG agreement (see db/lseg-licensing.md).
+ */
+export const DEFAULT_RETENTION_DAYS = 90;
+
+/**
+ * The licensing / redistribution / retention policy per data source (finding #7).
+ * Keyed by the `source` string the fundamentals/prices rows carry, so the policy
+ * lives once here rather than duplicated on every row. The seeded synthetic source
+ * is NON-DISPLAY (derived reconciliation, not shown as a live quote), internal-only
+ * (no redistribution), with the default cache TTL. These are illustrative defaults
+ * for the synthetic snapshot — a live source's terms must be signed off against the
+ * actual LSEG agreement before a live key.
+ */
+const DATA_SOURCES = [
+    {
+        source: FEED_SOURCE,
+        usageClass: 'non-display',
+        retentionDays: DEFAULT_RETENTION_DAYS,
+        redistribution: 'internal-only (no redistribution)',
+        notes: 'Synthetic snapshot, no LSEG entitlement bundled; illustrative policy — sign off real terms before a live key.',
+    },
+];
+
 /** Tables an LSEG query may read. */
-export const LSEG_ALLOWED_TABLES = Object.freeze(['organizations', 'instruments', 'lseg_fields', 'fundamentals', 'prices']);
+export const LSEG_ALLOWED_TABLES = Object.freeze(['organizations', 'instruments', 'lseg_fields', 'fundamentals', 'prices', 'data_sources']);
 
 /** Column-level allow-list for the LSEG warehouse. */
 export const LSEG_ALLOWED_COLUMNS = Object.freeze({
@@ -72,6 +100,7 @@ export const LSEG_ALLOWED_COLUMNS = Object.freeze({
     lseg_fields: ['field_code', 'name', 'category', 'unit', 'description'],
     fundamentals: ['id', 'org_permid', 'field_code', 'period', 'value', 'currency', 'basis', 'scale', 'periodicity', 'reporting_state', 'knowledge_date', 'retrieved_at', 'source'],
     prices: ['id', 'quote_permid', 'field_code', 'price_date', 'value', 'currency', 'scale', 'retrieved_at', 'source'],
+    data_sources: ['source', 'usage_class', 'retention_days', 'redistribution', 'notes'],
 });
 
 /** The reporting bases a fundamentals value can be aligned to (see schema). */
@@ -294,7 +323,8 @@ export function seedLseg(path = LSEG_DB_PATH) {
     db.exec('PRAGMA foreign_keys = ON');
     // Drop children before parents (prices → instruments/lseg_fields;
     // fundamentals → organizations/lseg_fields) so the FKs don't block a re-seed.
-    for (const table of ['prices', 'fundamentals', 'lseg_fields', 'instruments', 'organizations']) {
+    // data_sources has no FK, so its order is free.
+    for (const table of ['data_sources', 'prices', 'fundamentals', 'lseg_fields', 'instruments', 'organizations']) {
         db.exec(`DROP TABLE IF EXISTS ${table}`);
     }
     db.exec(readFileSync(LSEG_SCHEMA_PATH, 'utf8'));
@@ -311,6 +341,9 @@ export function seedLseg(path = LSEG_DB_PATH) {
     );
     const insertPrice = db.prepare(
         'INSERT INTO prices (quote_permid, field_code, price_date, value, currency, scale, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?)',
+    );
+    const insertSource = db.prepare(
+        'INSERT INTO data_sources (source, usage_class, retention_days, redistribution, notes) VALUES (?,?,?,?,?)',
     );
 
     for (const o of ORGANIZATIONS) insertOrg.run(o.orgPermid, o.name, o.sector);
@@ -368,8 +401,19 @@ export function seedLseg(path = LSEG_DB_PATH) {
         }
     }
 
+    // Licensing / retention policy per source (finding #7), so no persisted
+    // vendor data is untagged.
+    for (const s of DATA_SOURCES) insertSource.run(s.source, s.usageClass, s.retentionDays, s.redistribution, s.notes);
+
     db.close();
-    return { organizations: ORGANIZATIONS.length, instruments: INSTRUMENTS.length, fields: FIELDS.length, datapoints, prices };
+    return {
+        organizations: ORGANIZATIONS.length,
+        instruments: INSTRUMENTS.length,
+        fields: FIELDS.length,
+        datapoints,
+        prices,
+        sources: DATA_SOURCES.length,
+    };
 }
 
 /** Options common to the scenario runners. */

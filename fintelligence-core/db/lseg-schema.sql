@@ -173,3 +173,22 @@ CREATE TABLE prices (
 );
 
 CREATE INDEX idx_prices_quote ON prices(quote_permid, field_code, price_date);
+
+-- Licensing / redistribution / retention policy per data source (finding #7).
+-- The warehouse PERSISTS vendor data, which raises real questions before a live
+-- LSEG key: is the use DISPLAY (shown to a human) or NON-DISPLAY (machine/derived,
+-- billed differently); how long may a value be CACHED; may it be REDISTRIBUTED.
+-- Rather than duplicate that policy on every fundamentals/prices row (the source
+-- string is constant per batch), it lives here once, keyed by the same `source`
+-- string those rows carry. The retention report/control (src/lseg-retention.js)
+-- reads this to flag rows past their TTL and any source with no policy at all —
+-- so no persisted vendor data is silently untagged. This encodes the policy; it
+-- does not grant a right — the terms must be signed off against the actual LSEG
+-- agreement before a live key (see db/lseg-licensing.md).
+CREATE TABLE data_sources (
+    source         TEXT PRIMARY KEY,   -- matches fundamentals.source / prices.source
+    usage_class    TEXT NOT NULL DEFAULT 'non-display',   -- 'display' | 'non-display'
+    retention_days INTEGER,            -- cache TTL in days; NULL = no expiry policy set (a gap to flag)
+    redistribution TEXT NOT NULL DEFAULT 'internal-only', -- redistribution terms summary
+    notes          TEXT
+);

@@ -24,6 +24,7 @@ import { reconcileReportedDebt, reconcileReportedRevenue } from './enron.js';
 import { reconcileMrr } from './saas.js';
 import { netPositionAtClose, reconcileNetPosition, MARKETS_LOG_PATH } from './markets.js';
 import { reconcileGrossProfit, reconcileStandardizedVsAsReported } from './lseg.js';
+import { retentionReport } from './lseg-retention.js';
 
 /**
  * Shared shape for a reconciliation control: run a query that returns two
@@ -300,6 +301,37 @@ export function controlCatalog() {
                         { label: 'periodicity', key: 'periodicity_variants' },
                     ],
                 });
+            },
+        },
+        {
+            id: 'C1.1-lseg-data-retention',
+            criterion: 'Confidentiality (C1.1) — cached vendor data is tagged with its licensing terms and retained only within its licensed window',
+            warehouse: 'lseg',
+            description:
+                'Every persisted LSEG source carries a usage class + retention TTL (finding #7), and no cached ' +
+                'value is held past its TTL; an untagged source, a missing TTL, or a stale row is an EXCEPTION.',
+            run(options = {}) {
+                const report = retentionReport(options);
+                const issues = [];
+                if (report.untagged.length > 0) issues.push(`${report.untagged.length} untagged source(s)`);
+                if (report.missingTtl.length > 0) issues.push(`${report.missingTtl.length} source(s) with no TTL`);
+                if (report.staleTotal > 0) issues.push(`${report.staleTotal} row(s) past retention TTL`);
+                const control = controlResult({
+                    controlId: 'C1.1',
+                    criterion: this.criterion,
+                    description: this.description,
+                    status: report.ok ? CONTROL_STATUS.PASS : CONTROL_STATUS.EXCEPTION,
+                    exception: report.ok ? null : `data-governance gap(s): ${issues.join('; ')}`,
+                    figures: [
+                        { label: 'Sources tagged', value: `${report.sources.filter((s) => s.tagged).length}/${report.sources.length}` },
+                        { label: 'Rows past retention TTL', value: report.staleTotal, unit: 'rows' },
+                        { label: 'As of', value: report.asOf },
+                    ],
+                });
+                // A governance check reads policy + row metadata rather than
+                // producing a new attested query, so there is no query entry to
+                // package (same shape as the audit-chain-integrity control).
+                return { control, entry: null, rows: [], report };
             },
         },
         {

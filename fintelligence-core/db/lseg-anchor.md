@@ -164,6 +164,17 @@ treatment. The Python bridge (`scripts/lseg_fetch.py`) classifies failures into
 `permission_denied` / `not_found` / `transport` / `bad_request` / `dependency`,
 opens one session, chunks a large universe, and retries transport with backoff.
 
+**Licensing / retention governance (finding #7).** The warehouse persists vendor
+data, so each source's terms are tagged once in `data_sources` (`usage_class`
+display/non-display, `retention_days` cache TTL, `redistribution`) rather than
+duplicated per row. `retentionReport` / `fintel lseg retention` flag any source
+with no policy ("untagged"), any policy with no TTL, and any row held past its TTL
+(measured on `retrieved_at`); `--purge` deletes the stale rows; the
+`C1.1-lseg-data-retention` control turns all of that into PASS/EXCEPTION evidence.
+Ingest registers its source's policy so nothing lands untagged. These tags encode
+a policy, they do not grant a right — the terms must be signed off against the LSEG
+agreement first (checklist in `db/lseg-licensing.md`).
+
 Instruments in the seed: `IBM.N` (International Business Machines, NYSE),
 `AAPL.O` (Apple, Nasdaq), `VOD.L` (Vodafone Group, LSE). Reporting period
 `FY2023` (with `FY2022` held for IBM.N to exercise multi-period ingest). All

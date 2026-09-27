@@ -41,6 +41,7 @@ import {
     DEFAULT_PERIOD,
 } from '../src/lseg.js';
 import { FakeLsegSession, RealLsegSession, ingestFundamentals } from '../src/lseg-ingest.js';
+import { retentionReport, purgeExpired } from '../src/lseg-retention.js';
 import {
     controlResult,
     CONTROL_STATUS,
@@ -637,6 +638,45 @@ async function main() {
                     }
                     break;
                 }
+                case 'retention': {
+                    // Cache retention + licensing-tag governance (finding #7).
+                    const report = retentionReport({ asOf });
+                    console.log(`\nLSEG cache retention & licensing tags${asOf ? ` — as of ${asOf}` : ''}\n`);
+                    for (const s of report.sources) {
+                        const ttl = s.ttlSet ? `${s.retentionDays}d` : '—';
+                        console.log(`  ${(s.usageClass ?? 'UNTAGGED').padEnd(12)} TTL ${ttl.padStart(5)}  rows ${String(s.rows).padStart(3)}  stale ${String(s.stale).padStart(3)}  oldest ${s.oldest ?? '—'}`);
+                        console.log(`      ${s.source}`);
+                    }
+                    if (report.ok) {
+                        console.log('\n  ✓ PASS — every source tagged, TTL set, nothing held past it');
+                    } else {
+                        const gaps = [
+                            report.untagged.length ? `${report.untagged.length} untagged` : null,
+                            report.missingTtl.length ? `${report.missingTtl.length} no-TTL` : null,
+                            report.staleTotal ? `${report.staleTotal} past TTL` : null,
+                        ].filter(Boolean).join(', ');
+                        console.log(`\n  ✗ EXCEPTION — data-governance gap(s): ${gaps}`);
+                    }
+                    if (rest.includes('--purge')) {
+                        const purge = purgeExpired({ asOf });
+                        console.log(`\n  Purged ${purge.total} row(s) past TTL (fundamentals ${purge.purged.fundamentals}, prices ${purge.purged.prices}).`);
+                    } else if (report.staleTotal > 0) {
+                        console.log('  Run with --purge to delete rows held past their TTL.');
+                    }
+                    break;
+                }
+                case 'license': {
+                    // The licensing/redistribution posture, read from the data_sources tags.
+                    const report = retentionReport({});
+                    console.log('\nLSEG licensing / redistribution — sign off before a live key\n');
+                    for (const s of report.sources) {
+                        console.log(`  - ${s.source}`);
+                        console.log(`      usage: ${s.usageClass ?? 'UNTAGGED'}   cache TTL: ${s.ttlSet ? s.retentionDays + ' days' : 'NOT SET'}   redistribution: ${s.redistribution ?? '—'}`);
+                    }
+                    console.log('\n  Full sign-off checklist: fintelligence-core/db/lseg-licensing.md');
+                    console.log('  These tags encode a policy; they do not grant a right — confirm terms against the LSEG agreement.');
+                    break;
+                }
                 case 'audit': {
                     const verifier = signer ? { publicKey: signer.publicKey } : null;
                     const integrity = verify(LSEG_LOG_PATH, { verifier });
@@ -663,6 +703,8 @@ async function main() {
                     console.log('  fintel lseg prices [RIC] [--from DATE] [--to DATE]   closing-price time series (own grain, quote PermID)');
                     console.log('  fintel lseg ingest [RIC...] [--period FY2024] [--live] [--app-key KEY]   land data via the ingest seam');
                     console.log('    --live needs an LSEG entitlement: set LSEG_APP_KEY (or pass --app-key) + install lseg-data');
+                    console.log('  fintel lseg retention [--as-of DATE] [--purge]   cache-TTL + licensing-tag governance (finding #7)');
+                    console.log('  fintel lseg license                  show the per-source licensing/redistribution posture');
                     console.log('  fintel lseg audit                    verify the LSEG audit chain');
                     console.log('    add --export <file.json|.md> to reconcile   write a verifiable evidence packet');
                     process.exitCode = sub ? 2 : 0;

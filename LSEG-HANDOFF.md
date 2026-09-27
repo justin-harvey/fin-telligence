@@ -1,15 +1,15 @@
-# LSEG hardening — handoff (continue from P8)
+# LSEG hardening — handoff (backlog complete)
 
-_Self-contained. Written 2026-09-26. P1–P6 shipped on `main` (P6 = commit
-`faaf60e`); **P7 is implemented in the working tree, 160 tests green, NOT yet
-committed** (repo `justin-harvey/fin-telligence`, clone
+_Self-contained. Written 2026-09-26. P1–P7 shipped on `main` (release tag
+`v0.7.0-lseg-p7`); **P8 is implemented in the working tree, 165 tests green, NOT
+yet committed** (repo `justin-harvey/fin-telligence`, clone
 `/home/nah/Claudia/fin-telligence`)._
 
-This picks up where `LSEG-ARCHITECTURE-REVIEW.md` (the master findings + backlog)
-left off. **P1–P7 are done and tested** (P1–P6 shipped; P7 sits uncommitted in the
-working tree — commit/push when ready). Remaining: **P8** plus a few cleanup
-items. Read the review for the full findings; this doc is the "what's true now +
-do next" for a fresh session.
+This is the end of the `LSEG-ARCHITECTURE-REVIEW.md` backlog. **P1–P8 are all done
+and tested** (P1–P7 shipped; P8 sits uncommitted in the working tree — commit/push
+when ready). No open LSEG findings remain — only the opportunistic cleanup below
+and the whole-project M7 deploy in `HANDOFF.md`. Read the review for the full
+findings; this doc is the "what's true now" for a fresh session.
 
 ---
 
@@ -51,7 +51,7 @@ do next" for a fresh session.
 
 ---
 
-## What P1–P7 changed (so you don't re-derive it)
+## What P1–P8 changed (so you don't re-derive it)
 
 | # | What | Key surface |
 |---|------|-------------|
@@ -62,6 +62,7 @@ do next" for a fresh session.
 | P5 | **Field parameters** `scale`/`periodicity`/`reporting_state` on the grain; **FX guard**: reconciliations refuse (EXCEPTION) on mixed currency/scale/periodicity via `COUNT(DISTINCT …)` variant checks | `lseg-schema.sql`, `lseg.js`, `controls.js`, `lseg-ingest.js`, `bin/fintel.js` |
 | P6 | **Bitemporal** `knowledge_date` (transaction time) on the grain; restatements version (new row, not overwrite); reads take `asOf` (default `9999-12-31`=latest) injecting a correlated `MAX(knowledge_date)<=asOf` subquery → exactly one vintage per (org,field,period,basis), no double-count, pre-vintage→N/A; CLI `--as-of`; `verify()` intact across a restatement. Seed adds IBM.N FY2021 original+restated | `lseg-schema.sql`, `lseg.js`, `lseg-ingest.js`, `bin/fintel.js`, `db/lseg-anchor.md`, `test/lseg.test.js` |
 | P7 | **`lseg-data` ops.** (a) Bridge classifies failures → `{error, kind}` (`permission_denied`/`not_found`/`transport`/`bad_request`/`dependency`), surfaced on `RealLsegSession` errors. (b) **Pricing at its own grain**: `quote_permid` on `instruments` + new `prices` table (quote × trading day) via `get_history`; `TR.PriceClose` out of `fundamentals`; `ingestFundamentals` refuses Pricing fields, `ingestPrices` refuses non-Pricing; read via `priceCloseSeries` / `fintel lseg prices`. (c) One session + universe chunking + transport backoff (`RealLsegSession` `chunkSize`/`maxRetries`/`backoff`) | `scripts/lseg_fetch.py`, `lseg-schema.sql`, `lseg.js`, `lseg-ingest.js`, `bin/fintel.js`, `db/lseg-anchor.md`, `test/lseg.test.js`, `test/lseg-ingest.test.js` |
+| P8 | **Licensing / retention governance.** New `data_sources` table tags each source once (`usage_class` display/non-display, `retention_days` TTL, `redistribution`) — also closes the per-row-duplication cleanup. `lseg-retention.js`: `retentionReport` (rows past TTL on `retrieved_at`, untagged sources, no-TTL policies) + `purgeExpired` (dry-run option). `C1.1-lseg-data-retention` control → PASS/EXCEPTION. Ingest registers its source's policy so nothing lands untagged. CLI `fintel lseg retention [--as-of DATE] [--purge]` + `fintel lseg license`. Sign-off checklist `db/lseg-licensing.md` | `lseg-schema.sql`, `lseg.js`, `src/lseg-retention.js`, `controls.js`, `lseg-ingest.js`, `bin/fintel.js`, `db/lseg-anchor.md`, `db/lseg-licensing.md`, `test/lseg-retention.test.js` |
 
 **Real Org PermIDs (validate before real ingest, like RICs/TR.* codes):**
 IBM `4295904307`, Apple `4295905573`, Vodafone Group `4295896661`.
@@ -98,6 +99,12 @@ IBM `4295904307`, Apple `4295905573`, Vodafone Group `4295896661`.
    `quote_permid` is a synthetic `QUOTE-PENDING:<RIC>` placeholder; validate real
    ones before a live ingest. Any new query on `prices` needs its columns in
    `LSEG_ALLOWED_COLUMNS.prices` or the guard refuses it.
+10. **No untagged persisted vendor data.** Every `source` that lands rows must have
+    a `data_sources` policy row (usage class + TTL + redistribution); seed and
+    ingest register it, and `retentionReport` / the `C1.1` control flag any gap.
+    Retention staleness is measured on `retrieved_at` vs the source TTL; `retention`
+    and the `C1.1` control default to *today*, so pin `--as-of` / `asOf` in tests.
+    The tags encode policy, they don't grant a right — see `db/lseg-licensing.md`.
 
 ---
 
@@ -156,11 +163,26 @@ spot-checked directly (`python3`), but the bridge is still only run against
 via lseg-mcp before a live pull. `TR.CompanyMarketCap` (also a daily series in
 reality) left in `fundamentals` as a noted candidate for the same treatment.
 
-### P8 — Licensing / redistribution sign-off (#7)  · S (mostly non-code) · **do next**
+### P8 — Licensing / redistribution sign-off (#7)  · ✅ DONE 2026-09-26 (uncommitted)
 
-The design persists LSEG data to a snapshot warehouse. Before a live key: confirm
-display vs non-display usage, caching TTLs, redistribution terms. Add usage
-tagging + retention/TTL controls on the warehouse. Largely a policy/sign-off task.
+The warehouse persists vendor data, so each source's terms are now tagged once in
+the **`data_sources`** table (`usage_class` display/non-display, `retention_days`
+cache TTL, `redistribution`) — one policy row per source, not a constant repeated
+per data row (that also closes the per-row-duplication cleanup). `src/lseg-retention.js`
+reads it: **`retentionReport`** flags rows held past their TTL (on `retrieved_at`),
+untagged sources, and TTL-less policies; **`purgeExpired`** deletes the stale rows
+(dry-run option). The **`C1.1-lseg-data-retention`** control turns that into
+PASS/EXCEPTION evidence, and ingest registers its source's policy so nothing lands
+untagged. CLI: `fintel lseg retention [--as-of DATE] [--purge]` and `fintel lseg
+license`. The pre-live-key **sign-off checklist** (display vs non-display, TTL,
+redistribution, entitlement scope, identifier validity) is `db/lseg-licensing.md`.
+6 new tests (165 total, green).
+
+The one thing code cannot do: **sign the agreement.** The tags encode a policy and
+enforce it (untagged/stale → EXCEPTION); they do not grant a right. The real usage
+class, TTL and redistribution terms per dataset must be confirmed against the LSEG
+contract and the tags updated to match before a live key — that is the actual
+"sign-off," and `db/lseg-licensing.md` is where it gets recorded.
 
 ### Docs backlog — teach-from-zero root README (requested 2026-09-26)
 
@@ -206,7 +228,7 @@ mentions LSEG only in passing and teaches none of the vocabulary. It must:
 
 ## Pointers
 
-- `LSEG-ARCHITECTURE-REVIEW.md` — master findings + backlog (P1–P7 checked off).
+- `LSEG-ARCHITECTURE-REVIEW.md` — master findings + backlog (P1–P8 all checked off).
 - `fintelligence-core/db/lseg-anchor.md` — claim discipline, validated field/COA
   table, identifier model, the two reconciliations + FX guard.
 - `fintelligence-core/mcp/README.md` — lseg-mcp workflow + credential path

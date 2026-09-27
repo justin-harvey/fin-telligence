@@ -35,7 +35,21 @@ import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LSEG_DB_PATH, LSEG_SCHEMA_PATH, DEFAULT_PERIOD, periodicityOf } from './lseg.js';
+import { LSEG_DB_PATH, LSEG_SCHEMA_PATH, DEFAULT_PERIOD, DEFAULT_RETENTION_DAYS, periodicityOf } from './lseg.js';
+
+/**
+ * Register a data source's licensing/retention policy (finding #7) so no persisted
+ * vendor data is left untagged. INSERT OR IGNORE: the first ingest of a source sets
+ * its policy; later ingests keep it (change it deliberately, not by re-ingesting).
+ *
+ * @param {object} db  an open DatabaseSync
+ * @param {{ source: string, usageClass: string, retentionDays: number|null, redistribution: string }} policy
+ */
+function registerSource(db, { source, usageClass, retentionDays, redistribution }) {
+    db.prepare(
+        'INSERT OR IGNORE INTO data_sources (source, usage_class, retention_days, redistribution, notes) VALUES (?,?,?,?,?)',
+    ).run(source, usageClass, retentionDays ?? null, redistribution, 'Registered at ingest — confirm terms against the LSEG agreement.');
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** The Python bridge RealLsegSession shells out to for real LSEG data. */
@@ -315,6 +329,9 @@ export function ingestFundamentals({
     period = DEFAULT_PERIOD,
     dbPath = LSEG_DB_PATH,
     source = 'LSEG Workspace (lseg-data)',
+    usageClass = 'non-display',
+    retentionDays = DEFAULT_RETENTION_DAYS,
+    redistribution = 'internal-only (no redistribution)',
     retrievedAt = new Date().toISOString().slice(0, 10),
 }) {
     if (!session || typeof session.getData !== 'function') {
@@ -336,6 +353,8 @@ export function ingestFundamentals({
             if (!existsSync(LSEG_SCHEMA_PATH)) throw new Error(`LSEG schema not found at ${LSEG_SCHEMA_PATH}`);
             db.exec(readFileSync(LSEG_SCHEMA_PATH, 'utf8'));
         }
+        // Tag the source's licensing/retention policy before landing any data.
+        registerSource(db, { source, usageClass, retentionDays, redistribution });
 
         const fieldCategory = new Map(
             db.prepare('SELECT field_code, category FROM lseg_fields').all().map((r) => [r.field_code, r.category]),
@@ -443,6 +462,9 @@ export function ingestPrices({
     end = null,
     dbPath = LSEG_DB_PATH,
     source = 'LSEG Workspace (lseg-data get_history)',
+    usageClass = 'non-display',
+    retentionDays = DEFAULT_RETENTION_DAYS,
+    redistribution = 'internal-only (no redistribution)',
     retrievedAt = new Date().toISOString().slice(0, 10),
 }) {
     if (!session || typeof session.getHistory !== 'function') {
@@ -461,6 +483,8 @@ export function ingestPrices({
             if (!existsSync(LSEG_SCHEMA_PATH)) throw new Error(`LSEG schema not found at ${LSEG_SCHEMA_PATH}`);
             db.exec(readFileSync(LSEG_SCHEMA_PATH, 'utf8'));
         }
+        // Tag the source's licensing/retention policy before landing any data.
+        registerSource(db, { source, usageClass, retentionDays, redistribution });
 
         const fieldCategory = new Map(
             db.prepare('SELECT field_code, category FROM lseg_fields').all().map((r) => [r.field_code, r.category]),
