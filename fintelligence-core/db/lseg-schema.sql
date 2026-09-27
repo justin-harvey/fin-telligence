@@ -145,9 +145,15 @@ CREATE TABLE fundamentals (
 
 CREATE INDEX idx_fund_org_period ON fundamentals(org_permid, period, basis);
 CREATE INDEX idx_fund_field      ON fundamentals(field_code);
--- Supports the latest-vintage-as-of lookup: MAX(knowledge_date) per (org, field,
--- period, basis) at or before an as-of cutoff.
-CREATE INDEX idx_fund_bitemporal ON fundamentals(org_permid, field_code, period, basis, knowledge_date);
+-- The vintage key, enforced (finding #8): exactly one row per (org, field, period,
+-- basis, knowledge_date). It also serves the latest-vintage-as-of lookup
+-- (MAX(knowledge_date) per (org, field, period, basis) at or before an as-of
+-- cutoff). Without UNIQUE, re-ingesting the same batch lands a second identical
+-- row that ties the first on knowledge_date, the as-of filter keeps both, and
+-- every field-keyed SUM doubles — while Revenue − Cost = Gross Profit still ties,
+-- so the integrity control would PASS on doubled figures. A changed figure is a
+-- new vintage (a later knowledge_date), never a second row at the same one.
+CREATE UNIQUE INDEX idx_fund_bitemporal ON fundamentals(org_permid, field_code, period, basis, knowledge_date);
 
 -- Pricing at its OWN grain (finding #6). A price is a TIME SERIES, not a
 -- per-period fundamental: TR.PriceClose is retrieved with `get_history`

@@ -35,7 +35,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LSEG_DB_PATH, LSEG_SCHEMA_PATH, DEFAULT_PERIOD, DEFAULT_RETENTION_DAYS, periodicityOf } from './lseg.js';
+import { LSEG_DB_PATH, LSEG_SCHEMA_PATH, DEFAULT_PERIOD, DEFAULT_RETENTION_DAYS, BASIS_STANDARDIZED, periodicityOf } from './lseg.js';
 
 /**
  * Register a data source's licensing/retention policy (finding #7) so no persisted
@@ -49,6 +49,41 @@ function registerSource(db, { source, usageClass, retentionDays, redistribution 
     db.prepare(
         'INSERT OR IGNORE INTO data_sources (source, usage_class, retention_days, redistribution, notes) VALUES (?,?,?,?,?)',
     ).run(source, usageClass, retentionDays ?? null, redistribution, 'Registered at ingest — confirm terms against the LSEG agreement.');
+}
+
+/**
+ * Roll back an ingest batch's open transaction without masking the error that
+ * caused it: SQLite rolls back by itself on some failures (disk full, I/O), and a
+ * second ROLLBACK would then throw in its place.
+ *
+ * @param {object} db  an open DatabaseSync
+ */
+function rollbackQuietly(db) {
+    try {
+        db.exec('ROLLBACK');
+    } catch {
+        // already rolled back — let the original error propagate
+    }
+}
+
+/**
+ * Refuse a vendor value that is not a whole number in its field's unit. Both
+ * persisted tables store INTEGERs (float-free, at the recorded scale), so a float,
+ * a numeric string or an infinity means the request's Scale/unit does not match
+ * the warehouse — landing it anyway would store a wrong or mistyped figure.
+ *
+ * @param {unknown} value
+ * @param {string} what  e.g. "IBM.N TR.Revenue FY2024"
+ * @param {string} unit  the field's declared unit (lseg_fields.unit)
+ */
+function requireIntegerValue(value, what, unit) {
+    if (!Number.isSafeInteger(value)) {
+        throw new Error(
+            `${what} came back as ${JSON.stringify(value)} — not a whole number of ${unit}. The warehouse stores ` +
+                'integers at the recorded scale; fix the request (Scale/unit) or convert before landing, rather than ' +
+                'storing a float or a string. Nothing from this batch was written.',
+        );
+    }
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -265,7 +300,18 @@ export class RealLsegSession {
             error.kind = kind;
             throw error;
         }
-        return out.rows || [];
+        // A bridge that exits non-zero, or prints no rows array, has failed even
+        // without a structured error (a crash, a killed process). Reading that as
+        // "no rows" would make a broken fetch look like an empty, successful one.
+        if (res.status !== 0 || !Array.isArray(out.rows)) {
+            const error = new Error(
+                `LSEG bridge failed without a structured error (exit ${res.status ?? res.signal}): ` +
+                    ((res.stderr || '').trim().slice(0, 400) || 'no output'),
+            );
+            error.kind = 'unknown';
+            throw error;
+        }
+        return out.rows;
     }
 }
 
@@ -312,6 +358,14 @@ export const DEFAULT_PRICE_FIXTURE = {
  * ingest can introduce a new RIC; a field code the dictionary does not know is
  * refused with a pointer to lseg-mcp.
  *
+ * Idempotent per vintage (finding #8). A datapoint whose vintage key — (org,
+ * field, period, basis, knowledge_date) — is already held with the same figure is
+ * skipped, so re-running an ingest never lands a second row for every field-keyed
+ * sum to double. The same key with a *different* figure is refused: a changed
+ * number is a new vintage (a later knowledge_date), never an overwrite or a sibling
+ * row. The batch lands in one transaction, so a refusal part-way through leaves the
+ * warehouse exactly as it was.
+ *
  * @param {object} params
  * @param {LsegSession} params.session
  * @param {string[]} params.universe            RICs to pull
@@ -320,7 +374,8 @@ export const DEFAULT_PRICE_FIXTURE = {
  * @param {string} [params.dbPath]
  * @param {string} [params.source]              the feed/entitlement string recorded on each row
  * @param {string} [params.retrievedAt]         ISO date; defaults to today
- * @returns {{ instruments: number, fields: number, datapoints: number, rows: object[] }}
+ * @returns {{ instruments: number, fields: number, datapoints: number, skipped: number, rows: object[] }}
+ *   `datapoints` landed; `skipped` were already held at the same vintage with the same figure
  */
 export function ingestFundamentals({
     session,
@@ -343,6 +398,9 @@ export function ingestFundamentals({
     const wideRows = session.getData(universe, fields, { period });
 
     const db = new DatabaseSync(dbPath);
+    // One transaction per batch (finding #8): a refused datapoint part-way through
+    // rolls back everything this call wrote, rather than leaving half a batch behind.
+    let inTransaction = false;
     try {
         db.exec('PRAGMA foreign_keys = ON');
         // Ensure the schema exists — an ingest can run against a fresh file.
@@ -353,12 +411,14 @@ export function ingestFundamentals({
             if (!existsSync(LSEG_SCHEMA_PATH)) throw new Error(`LSEG schema not found at ${LSEG_SCHEMA_PATH}`);
             db.exec(readFileSync(LSEG_SCHEMA_PATH, 'utf8'));
         }
+        db.exec('BEGIN');
+        inTransaction = true;
         // Tag the source's licensing/retention policy before landing any data.
         registerSource(db, { source, usageClass, retentionDays, redistribution });
 
-        const fieldCategory = new Map(
-            db.prepare('SELECT field_code, category FROM lseg_fields').all().map((r) => [r.field_code, r.category]),
-        );
+        const dictionary = db.prepare('SELECT field_code, category, unit FROM lseg_fields').all();
+        const fieldCategory = new Map(dictionary.map((r) => [r.field_code, r.category]));
+        const fieldUnit = new Map(dictionary.map((r) => [r.field_code, r.unit]));
         for (const field of fields) {
             if (!fieldCategory.has(field)) {
                 throw new Error(
@@ -388,15 +448,26 @@ export function ingestFundamentals({
             // stays NULL until a pricing ingest fills it (nullable UNIQUE allows it).
             "INSERT OR IGNORE INTO instruments (ric, org_permid, quote_permid, isin, exchange, currency) VALUES (?, ?, NULL, NULL, '', 'USD')",
         );
+        const findVintage = db.prepare(
+            'SELECT value, currency, scale FROM fundamentals WHERE org_permid = ? AND field_code = ? AND period = ? AND basis = ? AND knowledge_date = ?',
+        );
         const insertFact = db.prepare(
-            'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, scale, periodicity, reporting_state, knowledge_date, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            'INSERT INTO fundamentals (org_permid, field_code, period, value, currency, basis, scale, periodicity, reporting_state, knowledge_date, retrieved_at, source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
         );
 
         const seenInstruments = new Set();
         let datapoints = 0;
+        let skipped = 0;
         for (const row of wideRows) {
             const ric = row.Instrument;
-            if (!ric) continue;
+            // A row that names no instrument cannot be attributed, and skipping it
+            // would drop vendor data without a trace — so refuse the batch.
+            if (!ric) {
+                throw new Error(
+                    `The LSEG session returned a row with no Instrument (${JSON.stringify(row).slice(0, 200)}); ` +
+                        'refusing to guess which instrument it belongs to. Nothing from this batch was written.',
+                );
+            }
             if (!orgOf.has(ric)) {
                 // Unknown RIC: real LSEG data carries the Org PermID (e.g. via
                 // TR.OrganizationID); the synthetic seam does not, so mint a
@@ -417,16 +488,39 @@ export function ingestFundamentals({
             // knowledge_date — when this vintage became known (finding #5) —
             // defaults to the retrieval date; a live feed would carry the
             // vendor's as-reported/restatement date to distinguish the two.
+            const scale = 0;
+            const currency = currencyOf.get(ric);
             for (const field of fields) {
                 const value = row[field];
                 if (value == null) continue;
-                insertFact.run(orgPermid, field, p, value, currencyOf.get(ric), 0, periodicityOf(p), 'reported', retrievedAt, retrievedAt, source);
+                requireIntegerValue(value, `${ric} ${field} ${p}`, fieldUnit.get(field));
+                // The vintage key (finding #8). Already held with the same figure:
+                // a re-run, so skip it. Held with a different figure: refuse — a
+                // changed number is a new vintage, not a second row at this one.
+                const held = findVintage.get(orgPermid, field, p, BASIS_STANDARDIZED, retrievedAt);
+                if (held) {
+                    if (Number(held.value) === Number(value) && held.currency === currency && Number(held.scale) === scale) {
+                        skipped += 1;
+                        continue;
+                    }
+                    throw new Error(
+                        `Conflicting LSEG value for ${ric} ${field} ${p} (${BASIS_STANDARDIZED}, known ${retrievedAt}): ` +
+                            `the warehouse holds ${held.value} ${held.currency} (scale ${held.scale}), ` +
+                            `the feed returned ${value} ${currency} (scale ${scale}). A changed figure is a new vintage — ` +
+                            'land it as a restatement with a later knowledge_date, never as a second row at this one. ' +
+                            'Nothing from this batch was written.',
+                    );
+                }
+                insertFact.run(orgPermid, field, p, value, currency, BASIS_STANDARDIZED, scale, periodicityOf(p), 'reported', retrievedAt, retrievedAt, source);
                 datapoints += 1;
             }
         }
 
-        return { instruments: seenInstruments.size, fields: fields.length, datapoints, rows: wideRows };
+        db.exec('COMMIT');
+        inTransaction = false;
+        return { instruments: seenInstruments.size, fields: fields.length, datapoints, skipped, rows: wideRows };
     } finally {
+        if (inTransaction) rollbackQuietly(db);
         db.close();
     }
 }
@@ -439,7 +533,9 @@ export function ingestFundamentals({
  * day), keyed by the stable **quote** PermID rather than the org. Only real
  * Pricing-category fields may land here (the mirror of the fundamentals guard).
  * Idempotent per (quote, field, date) via INSERT OR REPLACE, so re-pulling a day
- * overwrites rather than duplicating.
+ * overwrites rather than duplicating. Like the fundamentals path, the batch lands in
+ * one transaction, and a value that is not a whole number in its field's unit (a
+ * major-unit float close, say) refuses the batch rather than landing it.
  *
  * @param {object} params
  * @param {{ getHistory: Function }} params.session
@@ -476,6 +572,9 @@ export function ingestPrices({
     const rows = session.getHistory(universe, fields, { interval, start, end });
 
     const db = new DatabaseSync(dbPath);
+    // One transaction per batch, as in ingestFundamentals: a refusal part-way
+    // through rolls back everything this call wrote.
+    let inTransaction = false;
     try {
         db.exec('PRAGMA foreign_keys = ON');
         const hasTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='prices'").get();
@@ -483,12 +582,14 @@ export function ingestPrices({
             if (!existsSync(LSEG_SCHEMA_PATH)) throw new Error(`LSEG schema not found at ${LSEG_SCHEMA_PATH}`);
             db.exec(readFileSync(LSEG_SCHEMA_PATH, 'utf8'));
         }
+        db.exec('BEGIN');
+        inTransaction = true;
         // Tag the source's licensing/retention policy before landing any data.
         registerSource(db, { source, usageClass, retentionDays, redistribution });
 
-        const fieldCategory = new Map(
-            db.prepare('SELECT field_code, category FROM lseg_fields').all().map((r) => [r.field_code, r.category]),
-        );
+        const dictionary = db.prepare('SELECT field_code, category, unit FROM lseg_fields').all();
+        const fieldCategory = new Map(dictionary.map((r) => [r.field_code, r.category]));
+        const fieldUnit = new Map(dictionary.map((r) => [r.field_code, r.unit]));
         for (const field of fields) {
             if (!fieldCategory.has(field)) {
                 throw new Error(
@@ -518,7 +619,14 @@ export function ingestPrices({
         for (const row of rows) {
             const ric = row.Instrument;
             const date = row.date;
-            if (!ric || !date) continue;
+            // Skipping an unattributable row would drop prices without a trace
+            // (the bridge used to emit exactly such rows) — refuse the batch.
+            if (!ric || !date) {
+                throw new Error(
+                    `The LSEG session returned a price row with no Instrument or date (${JSON.stringify(row).slice(0, 200)}); ` +
+                        'refusing to guess where it belongs. Nothing from this batch was written.',
+                );
+            }
             let quotePermid = quoteOf.get(ric);
             if (!quotePermid) {
                 // Real get_history carries the quote/instrument PermID; the
@@ -539,12 +647,16 @@ export function ingestPrices({
             for (const field of fields) {
                 const value = row[field];
                 if (value == null) continue;
+                requireIntegerValue(value, `${ric} ${field} ${date}`, fieldUnit.get(field));
                 insertPrice.run(quotePermid, field, date, value, currencyOf.get(ric) ?? 'USD', 0, retrievedAt, source);
                 datapoints += 1;
             }
         }
+        db.exec('COMMIT');
+        inTransaction = false;
         return { quotes: seenQuotes.size, fields: fields.length, datapoints, rows };
     } finally {
+        if (inTransaction) rollbackQuietly(db);
         db.close();
     }
 }
