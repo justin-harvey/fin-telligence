@@ -26,12 +26,21 @@ Response (stdout, JSON):
   history mode: { "rows": [ { "Instrument": "IBM.N", "date": "2024-03-28",
                               "TR.PriceClose": 22050, ... } ] }
   on failure:   { "error": "...", "kind": "permission_denied" | "not_found" |
-                  "transport" | "bad_request" | "dependency" | "unknown" }
+                  "transport" | "bad_request" | "bad_response" | "dependency" |
+                  "unknown" }
                 with a non-zero exit code.
 
 The `kind` lets the Node side branch: an entitlement gap (permission_denied) is a
 provisioning problem, an unknown field/instrument (not_found) is a request bug,
-and transport is retryable — the bridge already retries transport within a call.
+transport is retryable — the bridge already retries transport within a call — and
+bad_response means lseg-data answered with a frame the bridge will not guess at.
+
+Mapping discipline. A value is mapped to a field code by NAME only (headers are
+matched case-insensitively), never by column position: a positional guess lands a
+value under the wrong field code without any error. A missing value — None, NaN,
+pandas NA or NaT — leaves the field out of the row (absent, not zero, and never the
+non-JSON token NaN), and numpy scalars are unwrapped to plain numbers. A frame that
+cannot be mapped unambiguously is a bad_response error, not a guess.
 
 Prerequisites (only for real data — the demo never runs this):
   - pip install lseg-data
@@ -44,14 +53,17 @@ Fundamentals are pulled with get_data (a value per period); pricing is a time
 series and is pulled with get_history at its own grain (SDate/EDate/interval) —
 see finding #6 in LSEG-ARCHITECTURE-REVIEW.md. The exact call shape should be
 confirmed with lseg-mcp's `draft_api_call` / `get_package_signature` for your
-installed lseg-data version; this bridge is not exercised against a live session
-here (the tests run the deterministic FakeLsegSession), so treat the mapping as
-the documented form, to confirm before a live run.
+installed lseg-data version. This bridge has never run against a live session:
+test/lseg-bridge.test.js runs it end to end against a fake `lseg.data` module
+(test/fixtures/fake-lseg) that returns the frame shapes lseg-data documents, which
+pins the mapping and error handling — the live shapes still need confirming
+before a real pull.
 """
 
 import sys
 import os
 import json
+import math
 import time
 
 
@@ -59,6 +71,51 @@ def fail(message, code=1, kind="unknown"):
     """Emit a structured error the Node side can classify, and return an exit code."""
     print(json.dumps({"error": message, "kind": kind}))
     return code
+
+
+class ResponseShapeError(Exception):
+    """lseg-data returned a frame the bridge cannot map unambiguously to
+    (instrument, field code) values. Raised rather than guessed: a guessed mapping
+    lands a value under the wrong field code, or drops it, without any error."""
+
+
+def native(value):
+    """
+    A JSON-safe scalar, or None for every flavour of missing value.
+
+    lseg-data returns pandas frames, so a missing datapoint arrives as None, float
+    NaN, pandas NA or NaT, and a number can arrive as a numpy scalar. Left alone,
+    json.dumps writes NaN (not valid JSON — the Node side cannot parse it) and
+    default=str turns NA or a numpy scalar into text ("<NA>", "123").
+    """
+    if value is None or type(value).__name__ in ("NAType", "NaTType"):
+        return None
+    if hasattr(value, "isoformat"):  # datetime / date / pandas Timestamp
+        return value.isoformat()
+    if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+        try:
+            value = value.item()  # numpy scalar -> plain Python number
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
+def iso_date(value):
+    """A trading date as YYYY-MM-DD (get_history dates arrive as Timestamps)."""
+    value = native(value)
+    return None if value is None else str(value)[:10]
+
+
+def header(col):
+    """Split a column label — plain, or an (instrument, field) MultiIndex tuple —
+    into its trimmed (outer, inner) names."""
+    if isinstance(col, tuple):
+        outer = str(col[0]).strip() if len(col) > 0 else ""
+        inner = str(col[1]).strip() if len(col) > 1 else ""
+        return outer, inner
+    return str(col).strip(), ""
 
 
 def classify_error(exc):
@@ -140,8 +197,8 @@ def fetch_data(ld, universe, fields, parameters):
 def fetch_history(ld, universe, fields, interval, start, end):
     """
     One get_history call for a chunk of the universe (pricing: a time series at its
-    own grain, not a per-period fundamental — finding #6). Signature varies across
-    lseg-data versions, so try the documented kwargs and fall back positionally.
+    own grain, not a per-period fundamental — finding #6), with the documented
+    keyword arguments.
     """
     kwargs = {"universe": universe, "fields": fields}
     if interval:
@@ -150,53 +207,104 @@ def fetch_history(ld, universe, fields, interval, start, end):
         kwargs["start"] = start
     if end:
         kwargs["end"] = end
-    try:
-        return ld.get_history(**kwargs)
-    except TypeError:
-        return ld.get_history(universe, fields)
+    # No positional fallback here: retrying as get_history(universe, fields) would
+    # silently drop the requested interval/range and land a different series than
+    # the one asked for. A signature mismatch fails loudly instead.
+    return ld.get_history(**kwargs)
 
 
 def map_data_records(df, fields, period):
-    """Map a get_data frame into wide rows keyed by TR.* field code, per instrument."""
-    records = df.to_dict(orient="records")
-    data_cols = [c for c in df.columns if str(c).lower() != "instrument"]
+    """
+    Map a get_data frame into wide rows keyed by TR.* field code, one per
+    instrument. Columns are matched to field codes by name, case-insensitively
+    (lseg-data's header case varies by version). A requested field with no column
+    of its own raises: the old positional fallback paired the i-th field with the
+    i-th column, so a reordered or missing column put values under the wrong code.
+    """
+    by_name = {header(c)[0].upper(): c for c in df.columns}
+    inst_col = by_name.get("INSTRUMENT")
+    missing = [f for f in fields if f.upper() not in by_name]
+    if inst_col is None or missing:
+        raise ResponseShapeError(
+            f"get_data columns {[str(c) for c in df.columns]} do not name "
+            f"{'the instrument' if inst_col is None else missing}; refusing to map by position"
+        )
     rows = []
-    for rec in records:
-        inst = rec.get("Instrument") or rec.get("instrument")
+    for rec in df.to_dict(orient="records"):
+        inst = native(rec.get(inst_col))
+        if not inst:
+            raise ResponseShapeError(f"get_data returned a row with no instrument: {rec}")
         row = {"Instrument": inst, "period": period}
-        for i, field in enumerate(fields):
-            if field in rec and rec[field] is not None:
-                row[field] = rec[field]
-            elif i < len(data_cols) and rec.get(data_cols[i]) is not None:
-                # Positional fallback when headers are display names, not codes.
-                row[field] = rec[data_cols[i]]
-        rows.append(row)
-    return rows
-
-
-def map_history_records(df, fields):
-    """
-    Map a get_history frame into per-(instrument, date) rows. get_history typically
-    returns a Date-indexed frame; single-instrument requests carry field columns,
-    multi-instrument requests carry an Instrument column. This handles both and
-    leaves the exact live shape to confirm via lseg-mcp before a live run.
-    """
-    try:
-        df = df.reset_index()
-    except Exception:  # noqa: BLE001
-        pass
-    records = df.to_dict(orient="records")
-    rows = []
-    for rec in records:
-        # The date lands under 'Date'/'date' once the index is reset.
-        date = rec.get("Date") or rec.get("date") or rec.get("Timestamp")
-        inst = rec.get("Instrument") or rec.get("instrument")
-        row = {"Instrument": inst, "date": str(date) if date is not None else None}
         for field in fields:
-            if rec.get(field) is not None:
-                row[field] = rec[field]
+            value = native(rec.get(by_name[field.upper()]))
+            if value is not None:
+                row[field] = value
         rows.append(row)
     return rows
+
+
+DATE_HEADERS = ("DATE", "TIMESTAMP")
+
+
+def map_history_records(df, fields, chunk):
+    """
+    Map a get_history frame into one row per (instrument, trading day).
+
+    get_history returns a Date-indexed frame whose columns depend on the request:
+    one column per field for a single instrument; an (instrument, field)
+    MultiIndex for several; one column per instrument when several share a single
+    field; or a long frame with an Instrument column. Each shape is resolved by
+    NAME to (instrument, field), and anything else raises. The old mapping emitted
+    rows with no instrument for every shape but the long one, which the Node side
+    then skipped — so a live pull landed nothing, silently.
+    """
+    df = df.reset_index()
+    columns = list(df.columns)
+    wanted = {f.upper(): f for f in fields}
+    rics = {str(r).upper(): r for r in chunk}
+    date_col = next((c for c in columns if header(c)[0].upper() in DATE_HEADERS), None)
+    inst_col = next((c for c in columns if header(c)[0].upper() == "INSTRUMENT" and not header(c)[1]), None)
+
+    targets = {}  # column label -> (instrument, or None when the Instrument column names it; field code)
+    for col in columns:
+        if col == date_col or col == inst_col:
+            continue
+        outer, inner = header(col)
+        if inner:  # (instrument, field) MultiIndex
+            ric, field = rics.get(outer.upper()), wanted.get(inner.upper())
+        elif inst_col is not None:  # long shape
+            ric, field = None, wanted.get(outer.upper())
+        elif len(chunk) == 1:  # one instrument: its fields are the columns
+            ric, field = chunk[0], wanted.get(outer.upper())
+        elif len(fields) == 1:  # one field: the instruments are the columns
+            ric, field = rics.get(outer.upper()), fields[0]
+        else:
+            ric, field = None, None
+        if field and (ric or inst_col is not None):
+            targets[col] = (ric, field)
+
+    mapped = {field for _, field in targets.values()}
+    unmapped = [f for f in fields if f not in mapped]
+    if date_col is None or unmapped:
+        raise ResponseShapeError(
+            f"get_history columns {[str(c) for c in columns]} do not resolve "
+            f"{'a Date column' if date_col is None else unmapped} to (instrument, field); refusing to guess"
+        )
+
+    rows = {}
+    for rec in df.to_dict(orient="records"):
+        day = iso_date(rec.get(date_col))
+        if day is None:
+            raise ResponseShapeError(f"get_history returned a row with no date: {rec}")
+        for col, (ric, field) in targets.items():
+            inst = ric or native(rec.get(inst_col))
+            if not inst:
+                raise ResponseShapeError(f"get_history returned a row with no instrument: {rec}")
+            row = rows.setdefault((inst, day), {"Instrument": inst, "date": day})
+            value = native(rec.get(col))
+            if value is not None:
+                row[field] = value
+    return list(rows.values())
 
 
 def main():
@@ -249,19 +357,21 @@ def main():
 
     # One session, chunked over the universe, transport errors retried with
     # backoff — the session is opened once above and closed once in `finally`.
+    call = "get_history" if mode == "history" else "get_data"
     try:
         rows = []
         for chunk in chunked(universe, chunk_size):
             if mode == "history":
                 df = with_retry(lambda c=chunk: fetch_history(ld, c, fields, interval, start, end),
                                 max_retries, backoff)
-                rows.extend(map_history_records(df, fields))
+                rows.extend(map_history_records(df, fields, chunk))
             else:
                 df = with_retry(lambda c=chunk: fetch_data(ld, c, fields, parameters),
                                 max_retries, backoff)
                 rows.extend(map_data_records(df, fields, period))
+    except ResponseShapeError as e:
+        return fail(f"{call} returned a frame the bridge will not guess at: {e}", 72, kind="bad_response")
     except Exception as e:  # noqa: BLE001
-        call = "get_history" if mode == "history" else "get_data"
         return fail(f"{call} failed: {e}", 71, kind=classify_error(e))
     finally:
         try:
@@ -269,7 +379,14 @@ def main():
         except Exception:  # noqa: BLE001
             pass
 
-    print(json.dumps({"rows": rows}, default=str))
+    # allow_nan=False: native() already turned NaN into None, so a non-finite
+    # number reaching here (an infinity) fails loudly instead of emitting a token
+    # JSON.parse rejects.
+    try:
+        body = json.dumps({"rows": rows}, default=str, allow_nan=False)
+    except ValueError as e:
+        return fail(f"{call} returned a non-finite number: {e}", 72, kind="bad_response")
+    print(body)
     return 0
 
 
