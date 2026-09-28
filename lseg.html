@@ -227,7 +227,7 @@
       <section class="hero">
         <div class="hero-grid">
           <div class="hero-copy">
-            <p class="kicker">Live vendor data · verified &amp; attested</p>
+            <p class="kicker">Synthetic demo · real TR.* codes · verified &amp; attested</p>
             <h1>LSEG fundamentals<br /><span class="thin">company financials you can audit, field by field.</span></h1>
             <p class="lede">
               LSEG (London Stock Exchange Group, formerly Refinitiv) company fundamentals, addressed by
@@ -438,6 +438,91 @@
       </section>
 
       <section class="section">
+        <h2>Bitemporal: as-of reads survive a restatement</h2>
+        <p class="lede" style="font-size:16px;max-width:760px">
+          A figure has two independent time axes: the fiscal
+          <span class="ptip" tabindex="0" data-ptip="Valid time: the period the number is about (FY2021), regardless of when it was published.">period</span>
+          it is about, and the
+          <span class="ptip" tabindex="0" data-ptip="Knowledge (transaction) time: when the number became known, including when a restatement republished it. Stored as knowledge_date, kept distinct from the period.">knowledge date</span>
+          it became known on. A restatement lands as a <b>new row</b>, never an overwrite, so you can ask for the
+          vintage that was known on any past date, and every vintage reproduces its own hash.
+        </p>
+        <div class="cards" style="margin-top:16px">
+          <div class="card">
+            <h3>As known on 2022-06-01</h3>
+            <p class="sub">IBM.N &middot; FY2021 &middot; original vintage</p>
+            <div class="figrow"><span class="label">Revenue &minus; Cost of Revenue</span><span class="val reported">$27,350,000,000</span></div>
+            <div class="figrow"><span class="label">Reported gross (TR.GrossProfit)</span><span class="val reported">$27,350,000,000</span></div>
+            <div class="figrow"><span class="label">Variance</span><span class="val net">$0 &middot; PASS</span></div>
+          </div>
+          <div class="card">
+            <h3>Latest (restated)</h3>
+            <p class="sub">IBM.N &middot; FY2021 &middot; newest vintage</p>
+            <div class="figrow"><span class="label">Revenue &minus; Cost of Revenue</span><span class="val reported">$27,700,000,000</span></div>
+            <div class="figrow"><span class="label">Reported gross (TR.GrossProfit)</span><span class="val reported">$27,700,000,000</span></div>
+            <div class="figrow"><span class="label">Variance</span><span class="val net">$0 &middot; PASS</span></div>
+          </div>
+        </div>
+        <div class="gap" style="margin-top:16px">
+          <b>Same period, two knowledge dates, two figures.</b> The restatement moved FY2021 gross profit from
+          $27.35b to $27.70b, and the ledger keeps both.
+          <code class="inl">lseg reconcile IBM.N FY2021 --as-of 2022-06-01</code> returns the original; drop the
+          flag and you get the latest. Because each is a distinct row, re-running an as-of query reproduces its
+          exact hash and the audit chain stays intact <em>across</em> the restatement, the case that quietly breaks
+          naive provenance systems.
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Prices at their own grain</h2>
+        <p class="lede" style="font-size:16px;max-width:760px">
+          A price is a <b>time series</b>, not a per-period fundamental. So <code class="inl">TR.PriceClose</code>
+          lives in its own <code class="inl">prices</code> table, one row per quote &times; trading day, keyed by the
+          <span class="ptip" tabindex="0" data-ptip="The quote-level identifier (instrument × venue), distinct from the entity-level Org PermID fundamentals key on. In this synthetic demo it is a labelled placeholder (QUOTE-PENDING:RIC) until a real quote PermID is validated.">quote PermID</span>,
+          and is fetched with
+          <span class="ptip" tabindex="0" data-ptip="get_history returns a time series (start/end/interval), the right call for daily prices. get_data returns one value per reporting period, the right call for fundamentals.">get_history</span>,
+          not <code class="inl">get_data</code>. The ingest seam enforces the split both ways: it refuses to land a
+          pricing field as a fundamental, and a fundamental as a price.
+        </p>
+        <div class="prov" style="margin-top:16px">
+          <div class="row"><span class="k">series      </span> IBM.N &middot; TR.PriceClose &middot; daily close (USD)</div>
+          <div class="row"><span class="k">2024-03-26  </span> 160.50</div>
+          <div class="row"><span class="k">2024-03-27  </span> 162.10</div>
+          <div class="row"><span class="k">2024-03-28  </span> 163.55</div>
+          <div class="row"><span class="k">grain       </span> quote (PermID) &times; trading day &nbsp; <span class="pill">get_history</span></div>
+        </div>
+        <p class="src">
+          <code>node bin/fintel.js lseg prices IBM.N --from 2024-03-26 --to 2024-03-28</code>.
+          Values are synthetic; the quote PermID is a labelled placeholder until validated via lseg-mcp.
+        </p>
+      </section>
+
+      <section class="section">
+        <h2>Licensing &amp; retention governance</h2>
+        <p class="lede" style="font-size:16px;max-width:760px">
+          The warehouse <em>persists</em> vendor data, which is only lawful within the terms of an LSEG agreement.
+          So every source is tagged once with its
+          <span class="ptip" tabindex="0" data-ptip="display = a value shown to a human (a live quote on a screen); non-display = a value consumed by a machine or a derived calculation (a reconciliation). This engine's use is non-display / derived.">usage class</span>,
+          a cache
+          <span class="ptip" tabindex="0" data-ptip="Time-to-live: how long a cached vendor value may be retained. A shorter contractual window wins. lseg retention reports anything held past it; --purge deletes it.">retention TTL</span>,
+          and its redistribution terms, and the <code class="inl">C1.1</code> control fails on an untagged source,
+          a missing TTL, or a stale row. <b>These tags encode a policy, they do not grant a right.</b>
+        </p>
+        <div class="prov" style="margin-top:16px">
+          <div class="row"><span class="k">source     </span> LSEG synthetic snapshot (no entitlement)</div>
+          <div class="row"><span class="k">usage      </span> non-display &nbsp;&middot;&nbsp; cache TTL 90d &nbsp;&middot;&nbsp; internal-only (no redistribution)</div>
+          <div class="row"><span class="k">C1.1 as-of </span> 2026-09-28 &nbsp; sources tagged 1/1 &nbsp; 0 past TTL &nbsp; <span class="pill">PASS</span></div>
+        </div>
+        <div class="gap" style="margin-top:16px">
+          <b>The control enforces, it does not decorate.</b> Read as of a date inside the licensed window it passes;
+          let the cache age past its TTL and the same control turns <span style="color:var(--red)">EXCEPTION</span>
+          with the exact count of stale rows, which is precisely what a retention control is for. Before a live key,
+          the sign-off checklist (<code class="inl">db/lseg-licensing.md</code>) confirms usage class, TTL,
+          redistribution, and entitlement against the signed agreement.
+        </div>
+      </section>
+
+      <section class="section">
         <h2>From synthetic to live in one credential</h2>
         <div class="disc">
           The values here are <b>synthetic</b>, authored so the identities hold exactly. The ingest seam
@@ -454,7 +539,14 @@
       </section>
 
       <section class="section">
-        <h2>Connect live data</h2>
+        <h2>Live mode: gated behind a credential</h2>
+        <div class="disc" style="margin:0 0 16px;border-left-color:var(--amber)">
+          <b>Everything above is synthetic:</b> real RICs and <code>TR.*</code> codes, authored values, wired only to
+          this project's own MCP and engine. There is <b>no live vendor connection on this page.</b> Live mode is
+          gated behind an entitled LSEG credential: supply a key and a deployed engine URL below and the
+          <em>same</em> guard &rarr; reconcile &rarr; attest pipeline runs against genuine LSEG data. Without both,
+          this stays synthetic.
+        </div>
         <div class="flow">
           <span class="node here" tabindex="0" data-ptip="This page. It never holds the credential — it only points at a deployed engine. Nothing is sent from here until you set an engine URL.">this page</span>
           <span class="arw">&rarr;</span>
@@ -471,11 +563,11 @@
           <span class="node out" tabindex="0" data-ptip="A figure you can audit — reconciled and tamper-evident.">auditable answer</span>
         </div>
         <p class="flow-cap">
-          The key lives on the <b style="color:var(--text)">engine</b>, not on this page &mdash; that is the whole
-          point of keeping a credential server-side. The field below stores your engine URL and key
-          <b style="color:var(--text)">in this browser only</b> and points the page at that engine. Live fetch needs the
-          engine backend deployed (<code class="inl">fintel serve</code>), which is pending (M7), so today it will
-          read <span class="pending" style="border:0;padding:0">not connected</span>.
+          The key lives on the <b style="color:var(--text)">engine</b>, not on this page, that is the whole point of
+          keeping a credential server-side. The fields below store your engine URL and key
+          <b style="color:var(--text)">in this browser only</b> and gate the live path: until you provide a key, the
+          page stays in <b style="color:var(--amber)">synthetic</b> mode. Live fetch also needs the engine backend
+          deployed (<code class="inl">fintel serve</code>), which is pending (M7).
         </p>
         <div class="connect">
           <div class="field">
@@ -484,18 +576,18 @@
           </div>
           <div class="field">
             <label for="lseg-key">LSEG app key</label>
-            <input id="lseg-key" type="password" placeholder="your LSEG Data Platform / Workspace app key" autocomplete="off" spellcheck="false" />
+            <input id="lseg-key" type="password" placeholder="your entitled LSEG Data Platform / Workspace app key" autocomplete="off" spellcheck="false" />
           </div>
           <div class="actions">
-            <button id="connect-btn" type="button">Connect</button>
+            <button id="connect-btn" type="button">Go live</button>
             <button id="clear-btn" type="button" class="ghost">Clear</button>
-            <span class="status" id="connect-status"><span class="dot"></span><span class="label">not connected</span></span>
+            <span class="status" id="connect-status"><span class="dot"></span><span class="label">synthetic mode</span></span>
           </div>
           <div class="note">
-            Stored only in this browser (<code>localStorage</code>) — nothing leaves the page until you set an
-            engine URL, and then only that engine is contacted. The live fetch runs on the engine
-            (<code>fintel serve</code> with <code>LSEG_APP_KEY</code> + <code>lseg-data</code> against a
-            Workspace session). Don't paste a production key on a shared machine.
+            Stored only in this browser (<code>localStorage</code>), nothing leaves the page until you set an engine
+            URL, and then only that engine is contacted. The live fetch runs on the engine (<code>fintel serve</code>
+            with <code>LSEG_APP_KEY</code> + <code>lseg-data</code> against a Workspace session). Don't paste a
+            production key on a shared machine.
           </div>
         </div>
       </section>
@@ -671,7 +763,7 @@ node bin/fintel.js <span class="p">lseg ingest IBM.N --period FY2023 --live</spa
           var ctrl = new AbortController();
           var t = setTimeout(function () { ctrl.abort(); }, 5000);
           fetch(u, { method: 'GET', mode: 'cors', signal: ctrl.signal })
-            .then(function () { clearTimeout(t); setStatus('ok', 'connected — engine reachable'); })
+            .then(function () { clearTimeout(t); setStatus('ok', 'live, engine reachable'); })
             .catch(function () { clearTimeout(t); setStatus('err', 'engine unreachable (deploy pending, or CORS not allowed)'); });
         }
 
@@ -681,14 +773,15 @@ node bin/fintel.js <span class="p">lseg ingest IBM.N --period FY2023 --live</spa
           if (saved.appKey) key.value = saved.appKey;
         } catch (e) {}
 
-        setStatus('idle', url.value.trim()
-          ? 'saved — click Connect to check the engine'
-          : 'not connected — engine backend pending (M7)');
+        setStatus('idle', (url.value.trim() && key.value)
+          ? 'saved, click Go live to check the engine'
+          : 'synthetic mode, add an entitled key + engine URL to go live');
 
         btn.addEventListener('click', function () {
           save();
           var u = url.value.trim();
-          if (!u) { setStatus('idle', 'not connected — set your engine URL (backend pending, M7)'); return; }
+          if (!key.value) { setStatus('idle', 'synthetic mode, an entitled LSEG key is required to go live'); return; }
+          if (!u) { setStatus('idle', 'synthetic mode, set your engine URL (backend pending, M7)'); return; }
           if (!/^https?:\/\//.test(u)) { setStatus('err', 'enter a full URL (https://…)'); return; }
           probe(u);
         });
@@ -696,7 +789,7 @@ node bin/fintel.js <span class="p">lseg ingest IBM.N --period FY2023 --live</spa
           url.value = ''; key.value = '';
           try { localStorage.removeItem(KEY); } catch (e) {}
           window.FINTEL_LSEG = null;
-          setStatus('idle', 'cleared');
+          setStatus('idle', 'synthetic mode, cleared');
         });
       })();
     </script>

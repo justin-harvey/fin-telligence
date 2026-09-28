@@ -278,8 +278,14 @@ const RESTATEMENTS = [
     },
 ];
 
-/** The date the synthetic snapshot is stamped as retrieved (and first known). */
-const RETRIEVED_AT = '2024-03-31';
+/**
+ * The knowledge date of the baseline synthetic snapshot: when these figures were
+ * "first known" (the bitemporal valid-knowledge time the as-of reads resolve
+ * against). Distinct from `retrieved_at`, the cache timestamp, which the seed
+ * stamps with the actual retrieval date (default: today) so the retention TTL is
+ * measured from when the cache was populated, not a frozen date.
+ */
+const SNAPSHOT_KNOWLEDGE_DATE = '2024-03-31';
 
 /**
  * Synthetic daily closing-price series per instrument (finding #6: pricing is a
@@ -318,7 +324,7 @@ export function periodicityOf(period) {
  * @param {string} [path]
  * @returns {{ organizations: number, instruments: number, fields: number, datapoints: number }}
  */
-export function seedLseg(path = LSEG_DB_PATH) {
+export function seedLseg(path = LSEG_DB_PATH, { retrievedAt = new Date().toISOString().slice(0, 10) } = {}) {
     const db = new DatabaseSync(path);
     db.exec('PRAGMA foreign_keys = ON');
     // Drop children before parents (prices → instruments/lseg_fields;
@@ -364,10 +370,11 @@ export function seedLseg(path = LSEG_DB_PATH) {
             for (const [period, values] of Object.entries(byPeriod)) {
                 // Synthetic values are stored raw (scale 0), single-currency, as
                 // last reported; periodicity is read off the period label. The
-                // baseline snapshot's knowledge_date is the retrieval date — a
-                // single vintage, so the latest-as-of read returns it unchanged.
+                // baseline snapshot carries a single knowledge_date, so the
+                // latest-as-of read returns it unchanged; retrieved_at is the
+                // (dynamic) cache time, distinct from that knowledge date.
                 for (const [code, value] of Object.entries(values)) {
-                    insertFact.run(orgPermid, code, period, value, currency, basis, 0, periodicityOf(period), 'reported', RETRIEVED_AT, RETRIEVED_AT, FEED_SOURCE);
+                    insertFact.run(orgPermid, code, period, value, currency, basis, 0, periodicityOf(period), 'reported', SNAPSHOT_KNOWLEDGE_DATE, retrievedAt, FEED_SOURCE);
                     datapoints += 1;
                 }
             }
@@ -384,7 +391,7 @@ export function seedLseg(path = LSEG_DB_PATH) {
         const orgPermid = byRicOrg.get(v.ric);
         const currency = byRicCcy.get(v.ric);
         for (const [code, value] of Object.entries(v.values)) {
-            insertFact.run(orgPermid, code, v.period, value, currency, BASIS_STANDARDIZED, 0, periodicityOf(v.period), v.reportingState, v.knowledgeDate, RETRIEVED_AT, FEED_SOURCE);
+            insertFact.run(orgPermid, code, v.period, value, currency, BASIS_STANDARDIZED, 0, periodicityOf(v.period), v.reportingState, v.knowledgeDate, retrievedAt, FEED_SOURCE);
             datapoints += 1;
         }
     }
@@ -396,7 +403,7 @@ export function seedLseg(path = LSEG_DB_PATH) {
         const quotePermid = byRicQuote.get(ric);
         const currency = byRicCcy.get(ric);
         for (const [date, value] of series) {
-            insertPrice.run(quotePermid, PRICE_FIELD, date, value, currency, 0, RETRIEVED_AT, FEED_SOURCE);
+            insertPrice.run(quotePermid, PRICE_FIELD, date, value, currency, 0, retrievedAt, FEED_SOURCE);
             prices += 1;
         }
     }

@@ -17,12 +17,12 @@ import { getControl } from '../src/controls.js';
 
 function freshDb() {
     const db = join(mkdtempSync(join(tmpdir(), 'fintel-lsegret-')), 'lseg.db');
-    seedLseg(db);
+    seedLseg(db, { retrievedAt: '2024-03-31' });
     return db;
 }
 
-// The seed stamps every row retrieved_at = 2024-03-31 with a 90-day TTL, so an
-// as-of within the window is fresh and one well past it is entirely stale.
+// freshDb pins retrieved_at = 2024-03-31 (the seed's default is today) with a
+// 90-day TTL, so an as-of within the window is fresh and one well past it is stale.
 const WITHIN_TTL = '2024-04-15';
 const PAST_TTL = '2030-01-01';
 

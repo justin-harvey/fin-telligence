@@ -196,12 +196,17 @@ by `TR.*` field code through the `lseg-data` library, addressed by real RICs
 the line items that compose it, with provenance down to the exact LSEG field code.
 
 ```bash
-node bin/fintel.js lseg seed                     # instruments, TR.* field dictionary, fundamentals
-node bin/fintel.js lseg fundamentals IBM.N FY2023 # attested snapshot, each concept -> its blessed TR.* field
-node bin/fintel.js lseg reconcile IBM.N FY2023    # Gross Profit = Revenue - Cost of Revenue, attested
-node bin/fintel.js lseg ingest IBM.N --period FY2024   # land data via the ingest seam (synthetic session)
-node bin/fintel.js lseg ingest IBM.N --period FY2023 --live   # real data — needs LSEG_APP_KEY + lseg-data
-node bin/fintel.js lseg audit                     # verify the LSEG audit chain
+node bin/fintel.js lseg seed                        # instruments, TR.* field dictionary, fundamentals + prices
+node bin/fintel.js lseg fundamentals IBM.N FY2023   # attested snapshot, each concept -> its blessed TR.* field
+node bin/fintel.js lseg reconcile IBM.N FY2023      # integrity: Gross Profit = Revenue - Cost of Revenue, attested
+node bin/fintel.js lseg basis IBM.N FY2022          # data check: standardized (COA) vs as-reported (real variance)
+node bin/fintel.js lseg reconcile IBM.N FY2021 --as-of 2022-06-01  # bitemporal: the vintage known on that date
+node bin/fintel.js lseg prices IBM.N --from 2024-03-26 --to 2024-03-28  # daily close series (own grain, get_history)
+node bin/fintel.js lseg retention                   # cache-TTL + licensing governance (C1.1); --purge deletes stale
+node bin/fintel.js lseg license                     # per-source usage class / TTL / redistribution posture
+node bin/fintel.js lseg ingest IBM.N --period FY2024            # land data via the ingest seam (synthetic session)
+node bin/fintel.js lseg ingest IBM.N --period FY2023 --live     # real data: needs LSEG_APP_KEY + lseg-data
+node bin/fintel.js lseg audit                       # verify the LSEG audit chain
 ```
 
 It pairs with the open-source [`lseg-mcp`](https://github.com/GreenGrassBlueOcean/lseg_mcp)
