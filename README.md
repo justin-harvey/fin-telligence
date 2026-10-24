@@ -49,7 +49,7 @@ The same pipeline runs against four warehouses — the guard, grounding, lineage
 - **SaaS finance** — MRR, retention, LTV:CAC and cohort questions. The demo that shows the engine works.
 - **Capital markets** — trade-surveillance attestation: net position at market close (computed in SQL, pinned to an as-of timestamp, reproducible hash) and market-abuse surveillance (accounts that place and cancel within milliseconds — the shape spoofing and layering leave), framed against MAR / MiFID II. See the [core README](fintelligence-core/README.md#trade-surveillance-attestation).
 - **Enron reporting-gap POC** — Enron's FY2000 10-K numbers set against what the underlying rows support: revenue booked *gross* ($100,789m reported) vs the *net* merchant margin actually earned ($1,953m), and reported debt ($10,229m) vs the true total once the off-balance-sheet SPEs are included. The aggregates reconcile to Enron's **real** reported figures (cited to SEC accession `0001024401-01-500010`); the transaction rows are synthetic and labelled so. See the [core README](fintelligence-core/README.md#the-enron-reporting-gap-demo).
-- **LSEG fundamentals** — live vendor data, explained in full below.
+- **LSEG fundamentals** — real LSEG identifiers (RICs, Org PermIDs, `TR.*` field codes) with synthetic fundamentals values; no entitlement ships here. Explained in full below.
 
 ---
 
